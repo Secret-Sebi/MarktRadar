@@ -6,10 +6,12 @@ from pathlib import Path
 
 from ki import (
     aktion_aus_ki,
+    ki_satz,
     leeres_modell,
     merkmale,
     schritt,
     trainiere,
+    trefferquote,
     wahrscheinlichkeit,
 )
 from kurse import Bar
@@ -46,19 +48,24 @@ class ModellTests(unittest.TestCase):
             self.assertEqual(erster.beispiele, zweiter.beispiele)
             self.assertGreater(erster.beispiele, 0)
 
-    def test_modell_kann_die_aktion_aendern(self):
+    def test_ungepruefte_wahrscheinlichkeit_aendert_nichts(self):
         positiv = leeres_modell()
         eingabe = (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 1.0)
         for _ in range(20):
             positiv = schritt(positiv, eingabe, 1.0)
         chance = wahrscheinlichkeit(positiv, eingabe)
-        self.assertEqual(aktion_aus_ki("beobachten", positiv, chance, True), "einstieg_pruefen")
-        self.assertEqual(aktion_aus_ki("beobachten", positiv, chance, False), "beobachten")
-        negativ = leeres_modell()
-        for _ in range(20):
-            negativ = schritt(negativ, eingabe, 0.0)
-        chance_nein = wahrscheinlichkeit(negativ, eingabe)
-        self.assertEqual(aktion_aus_ki("einstieg_pruefen", negativ, chance_nein, True), "abwarten")
+        self.assertGreater(chance, 0.5)
+        self.assertEqual(aktion_aus_ki("beobachten", positiv, chance, True), "beobachten")
+        self.assertIn("späteren Fällen", ki_satz(positiv, chance))
+
+    def test_gemessene_trefferquote_darf_die_aktion_aendern(self):
+        eingabe = (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 1.0)
+        faelle = tuple((eingabe, 1) for _ in range(24))
+        self.assertEqual(trefferquote(faelle), (12, 12))
+        self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), None, True, (12, 12)), "einstieg_pruefen")
+        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), None, True, (2, 12)), "abwarten")
+        self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), None, False, (12, 12)), "beobachten")
+        self.assertIn("12-mal richtig", ki_satz(leeres_modell(), None, (12, 12)))
 
 
 if __name__ == "__main__":

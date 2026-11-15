@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +80,18 @@ def aus_gdelt(roh: dict) -> tuple[Meldung, ...]:
     return tuple(meldungen)
 
 
+def gegen_index(wert: float | None, index_wert: float | None) -> float | None:
+    if wert is None or index_wert is None:
+        return None
+    return wert - index_wert
+
+
+def soll_holen(letzter: int | None, jetzt: int, pause: int = 1800) -> bool:
+    if letzter is None:
+        return True
+    return jetzt - letzter >= pause
+
+
 def wirkung(balken, zeitpunkt: int, abstand: int) -> float | None:
     if abstand < 1:
         return None
@@ -106,7 +119,7 @@ def speichern(pfad: Path, symbol: str, meldungen: tuple[Meldung, ...]) -> int:
     return neu
 
 
-def nachtragen(pfad: Path, symbol: str, balken) -> int:
+def nachtragen(pfad: Path, symbol: str, balken, index_balken=None) -> int:
     with sqlite3.connect(pfad) as verbindung:
         _tabelle(verbindung)
         zeilen = verbindung.execute(
@@ -118,13 +131,14 @@ def nachtragen(pfad: Path, symbol: str, balken) -> int:
             werte = {abstand: wirkung(balken, int(zeit), abstand) for abstand in (1, 3, 5, 20)}
             if werte[5] is None:
                 continue
+            index_5 = wirkung(index_balken, int(zeit), 5) if index_balken else None
             verbindung.execute(
                 """
                 UPDATE nachrichten
-                SET wirkung_1 = ?, wirkung_3 = ?, wirkung_5 = ?, wirkung_20 = ?
+                SET wirkung_1 = ?, wirkung_3 = ?, wirkung_5 = ?, wirkung_20 = ?, rel_5 = ?
                 WHERE id = ?
                 """,
-                (werte[1], werte[3], werte[5], werte[20], nummer),
+                (werte[1], werte[3], werte[5], werte[20], gegen_index(werte[5], index_5), nummer),
             )
             geaendert += 1
     return geaendert
@@ -152,10 +166,10 @@ def statistik(pfad: Path, symbol: str) -> Befund:
         return Befund(name, gesamt[0], gesamt[1], "mehrere Kürzel", anzahl_eigen, median_eigen)
 
 
-def aktualisiere(pfad: Path, symbol: str, name: str, balken, oeffnen=urlopen) -> Befund:
+def aktualisiere(pfad: Path, symbol: str, name: str, balken, oeffnen=urlopen, index_balken=None) -> Befund:
     _holen(pfad, symbol, name, oeffnen)
     if pfad.exists():
-        nachtragen(pfad, symbol, balken)
+        nachtragen(pfad, symbol, balken, index_balken)
     return statistik(pfad, symbol) if pfad.exists() else Befund("unklar", 0, None, "keine Meldung")
 
 
@@ -187,10 +201,16 @@ def satz(befund: Befund) -> str:
     )
     if befund.anzahl < 20:
         text += " Kleine Stichprobe."
-    return text
+    return text + (
+        " Die Zuordnung prüft nur, ob Kürzel oder Name in der Überschrift stehen."
+        " Eine Branchenwirkung wird nicht geschätzt."
+    )
 
 
-def _holen(pfad: Path, symbol: str, name: str, oeffnen) -> None:
+def _holen(pfad: Path, symbol: str, name: str, oeffnen, jetzt: int | None = None) -> None:
+    moment = int(time.time()) if jetzt is None else jetzt
+    if pfad.exists() and not soll_holen(_letzter_abruf(pfad, symbol), moment):
+        return
     gesammelt: list[Meldung] = []
     yahoo = "https://query2.finance.yahoo.com/v1/finance/search?quotesCount=0&newsCount=6&q=" + quote(symbol)
     gdelt = (
@@ -207,6 +227,7 @@ def _holen(pfad: Path, symbol: str, name: str, oeffnen) -> None:
         gesammelt.extend(meldungen)
     if gesammelt:
         speichern(pfad, symbol, tuple(gesammelt))
+    _abruf_merken(pfad, symbol, moment)
 
 
 def _passt(meldung: Meldung, symbol: str, name: str) -> bool:
@@ -283,7 +304,44 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
             wirkung_1 REAL,
             wirkung_3 REAL,
             wirkung_5 REAL,
-            wirkung_20 REAL
+            wirkung_20 REAL,
+            rel_5 REAL
         )
         """
     )
+    spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")}
+    if "rel_5" not in spalten:
+        verbindung.execute("ALTER TABLE nachrichten ADD COLUMN rel_5 REAL")
+    verbindung.execute(
+        """
+        CREATE TABLE IF NOT EXISTS abruf (
+            symbol TEXT NOT NULL,
+            art TEXT NOT NULL,
+            zeit INTEGER NOT NULL,
+            PRIMARY KEY (symbol, art)
+        )
+        """
+    )
+
+
+def _letzter_abruf(pfad: Path, symbol: str) -> int | None:
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeile = verbindung.execute(
+            "SELECT zeit FROM abruf WHERE symbol = ? AND art = 'news'",
+            (symbol,),
+        ).fetchone()
+    return None if zeile is None else int(zeile[0])
+
+
+def _abruf_merken(pfad: Path, symbol: str, zeit: int) -> None:
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        verbindung.execute(
+            """
+            INSERT INTO abruf (symbol, art, zeit) VALUES (?, 'news', ?)
+            ON CONFLICT(symbol, art) DO UPDATE SET zeit = excluded.zeit
+            """,
+            (symbol, zeit),
+        )

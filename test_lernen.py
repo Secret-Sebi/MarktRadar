@@ -11,9 +11,11 @@ from lernen import (
     aktion_aus_verkauf,
     aus_gdelt,
     aus_yahoo,
+    gegen_index,
     kategorie,
     nachtragen,
     satz,
+    soll_holen,
     speichern,
     statistik,
     wirkung,
@@ -69,6 +71,13 @@ class WirkungTests(unittest.TestCase):
         self.assertEqual(aktion_aus_verkauf("beobachten", 8, 1.0, True), "beobachten")
         self.assertEqual(aktion_aus_verkauf("beobachten", 8, -2.0, True), "verkauf_pruefen")
         self.assertEqual(aktion_aus_verkauf("unvollstaendig", 8, -2.0, True), "unvollstaendig")
+
+    def test_index_und_abrufpause(self):
+        self.assertIsNone(gegen_index(None, 1.0))
+        self.assertAlmostEqual(gegen_index(2.0, 0.5), 1.5)
+        self.assertTrue(soll_holen(None, 1000))
+        self.assertFalse(soll_holen(1000, 2000, 1800))
+        self.assertTrue(soll_holen(1000, 3000, 1800))
 
 
 def statistik_leer():

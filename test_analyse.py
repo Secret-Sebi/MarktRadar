@@ -16,12 +16,11 @@ from analyse import (
 from beobachter import Zeile, bildschirm, zustand_nach_runde
 from kurse import gueltiges_symbol, kurse_aus_antwort
 
-
 BERLIN = ZoneInfo("Europe/Berlin")
 
 
 def k(**werte):
-    basis = dict(
+    basis = dict(  # noqa: C408
         preis=100.0,
         sma20=100.0,
         sma50=100.0,
@@ -45,6 +44,7 @@ class AnalyseTests(unittest.TestCase):
     def test_rsi_bei_reinem_anstieg_und_fall(self):
         self.assertEqual(rsi(tuple(range(1, 40))), 100.0)
         self.assertEqual(rsi(tuple(range(40, 0, -1))), 0.0)
+        self.assertEqual(rsi(tuple([20.0] * 30)), 50.0)
 
     def test_ruecksetzer_im_aufwaertstrend_wird_pruefen(self):
         urteil = urteilen(

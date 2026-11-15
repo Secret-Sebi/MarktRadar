@@ -82,6 +82,36 @@ def _potenzial_stufe(aktion: str, score: int):
     return "niedrig", "Potenzial niedrig"
 
 
+def lage(zeile) -> str:
+    technik = zeile.urteil.titel
+    fundamental = getattr(zeile, "fundamental", "") or "fehlt"
+    if int(getattr(zeile, "faelle", 0) or 0) <= 0:
+        nachrichten = "noch nichts zu dieser Aktie gelernt"
+    else:
+        nachrichten = "gespeicherte Fälle, ohne Ursachenbehauptung"
+    markt = "fehlt"
+    risiko = "fehlt"
+    tech = getattr(zeile, "technik", None)
+    if tech is not None and getattr(tech, "relativ", None) is not None:
+        markt = f"gegen {tech.index_titel or 'Index'} {de_prozent(tech.relativ)}"
+    preis = getattr(zeile, "preis", None)
+    stuetze = None if tech is None else getattr(tech, "stuetze", None)
+    if stuetze and preis:
+        risiko = (
+            f"bis zur Stütze {de_zahl((preis / stuetze - 1.0) * 100.0, 1)} %. "
+            "Das ist kein garantierter Verlust."
+        )
+    return "\n".join(
+        (
+            f"Technik: {technik}",
+            f"Fundamental: {fundamental}",
+            f"Nachrichten: {nachrichten}",
+            f"Markt: {markt}",
+            f"Risiko: {risiko}",
+        )
+    )
+
+
 def einzelheiten(zeile) -> str:
     zeilen = []
     technik = getattr(zeile, "technik", None)

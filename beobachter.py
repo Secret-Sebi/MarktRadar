@@ -10,7 +10,7 @@ Nur Text im Terminal:
 Einmal anzeigen und beenden:
     python3 beobachter.py --einmal
 
-Es öffnet keinen Server, kein Fenster und kein Trade-Republic-Konto.
+Das Fenster spricht nur 127.0.0.1 auf diesem Mac an. Es gibt kein Konto und keinen Broker.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +44,7 @@ from analyse import (
     urteilen,
 )
 from database import signal_speichern
-from ki import aktion_aus_ki, ki_satz, schaetzung, trainiere
+from ki import aktion_aus_ki, ki_satz, messe, schaetzung, trainiere
 from kurse import gueltiges_symbol, hole_kurs
 from lernen import aktion_aus_lernen, aktion_aus_verkauf, aktualisiere, satz
 from technik import berechne, vergleichsindex
@@ -148,6 +149,10 @@ class Zeile:
     lernen: str = ""
     hinweis: str = ""
     faelle: int = 0
+    kurszeit: int | None = None
+    abweichung: float | None = None
+    handelsplatz: str = ""
+    fundamental: str = "fehlt"
 
 
 def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
@@ -302,14 +307,27 @@ def zustand_nach_runde(alt: dict, zeilen: Sequence[Zeile], zeit: str):
 def sammle(symbole: Sequence[str], bei_zeile=None) -> tuple[Zeile, ...]:
     fx: dict = {}
     maerkte = _maerkte(symbole, fx)
+    kurse = _parallel(tuple(symbole), fx)
     zeilen: tuple[Zeile, ...] = ()
-    for index, symbol in enumerate(symbole):
-        if index or maerkte:
-            time.sleep(PAUSE_SEKUNDEN)
-        zeilen = zeilen + (bewerte(symbol, maerkte.get(vergleichsindex(symbol)), fx),)
+    for symbol in symbole:
+        zeilen = zeilen + (bewerte(symbol, maerkte.get(vergleichsindex(symbol)), fx, kurse.get(symbol)),)
         if bei_zeile is not None:
             bei_zeile(zeilen)
     return zeilen
+
+
+def _parallel(symbole: tuple[str, ...], fx: dict) -> dict:
+    if not symbole:
+        return {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return dict(pool.map(lambda symbol: (symbol, _kurs_oder_fehler(symbol, fx)), symbole))
+
+
+def _kurs_oder_fehler(symbol: str, fx: dict):
+    try:
+        return hole_kurs(symbol, fx=fx)
+    except (ConnectionError, LookupError, ValueError, json.JSONDecodeError) as fehler:
+        return fehler
 
 
 def _maerkte(symbole: Sequence[str], fx: dict | None = None) -> dict:
@@ -325,9 +343,12 @@ def _maerkte(symbole: Sequence[str], fx: dict | None = None) -> dict:
     return maerkte
 
 
-def bewerte(symbol: str, markt=None, fx: dict | None = None) -> Zeile:
+def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeile:
+    if isinstance(daten, Exception):
+        return _fehler(symbol, str(daten))
     try:
-        daten = hole_kurs(symbol, fx=fx)
+        if daten is None:
+            daten = hole_kurs(symbol, fx=fx)
     except (ConnectionError, LookupError, ValueError, json.JSONDecodeError) as fehler:
         return _fehler(symbol, str(fehler))
     zahlen = kennzahlen_aus_schluessen(daten.schluesse, daten.ist_etf, daten.hoch_52w)
@@ -347,7 +368,10 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None) -> Zeile:
     thema = "unklar"
     befund = None
     try:
-        befund = aktualisiere(DATENBANK, daten.symbol or symbol, daten.name or symbol, daten.balken)
+        index_balken = None if markt is None else getattr(markt, "balken", None)
+        befund = aktualisiere(
+            DATENBANK, daten.symbol or symbol, daten.name or symbol, daten.balken, index_balken=index_balken
+        )
         lern_satz = satz(befund)
         thema = befund.kategorie
         if aktion_aus_lernen(urteil.aktion, befund.anzahl, befund.median) != urteil.aktion:
@@ -363,8 +387,11 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None) -> Zeile:
     try:
         modell = trainiere(DATENBANK, daten.symbol or symbol, daten.balken)
         chance = schaetzung(modell, daten.balken, thema)
-        lern_satz = f"{lern_satz} {ki_satz(modell, chance)}".strip()
-        neue_aktion = aktion_aus_ki(urteil.aktion, modell, chance, (daten.datenstatus or "ok") == "ok")
+        pruefung = messe(DATENBANK, daten.symbol or symbol, daten.balken)
+        lern_satz = f"{lern_satz} {ki_satz(modell, chance, pruefung)}".strip()
+        neue_aktion = aktion_aus_ki(
+            urteil.aktion, modell, chance, (daten.datenstatus or "ok") == "ok", pruefung
+        )
         if neue_aktion == "abwarten" and neue_aktion != urteil.aktion:
             urteil = Urteil(
                 "abwarten",
@@ -394,6 +421,14 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None) -> Zeile:
             urteil.grund,
             "Kein Auftrag. In Trade Republic selbst prüfen, ob du verkaufen willst.",
         )
+    try:
+        from urllib.request import urlopen
+
+        from fundamental import hole as hole_fundamental
+
+        fundamental = hole_fundamental(daten.symbol or symbol, urlopen)
+    except (OSError, ValueError):
+        fundamental = "fehlt"
     return Zeile(
         symbol=daten.symbol or symbol,
         name=daten.name or symbol,
@@ -410,6 +445,10 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None) -> Zeile:
         lernen=lern_satz,
         hinweis=daten.hinweis,
         faelle=0 if befund is None else befund.eigene,
+        kurszeit=daten.kurszeit,
+        abweichung=daten.abweichung,
+        handelsplatz=daten.handelsplatz,
+        fundamental=fundamental,
     )
 
 

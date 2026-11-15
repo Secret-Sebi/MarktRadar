@@ -3,9 +3,9 @@
 from datetime import datetime
 from pathlib import Path
 
-from analyse import BERLIN, handels_hinweis
+from analyse import BERLIN, de_zahl, handels_hinweis
 from analyse import fenster as handelsfenster
-from ansicht import briefing, einzelheiten, kurzname, potenzial
+from ansicht import briefing, einzelheiten, kurzname, lage, potenzial
 from beobachter import _kurs_prozent, _preis, _sortiert, _warte_text
 
 _SEITE = Path(__file__).resolve().parent / "fenster_app" / "seite.html"
@@ -82,7 +82,7 @@ def _karte(zeile) -> dict:
         "titel": zeile.urteil.titel,
         "aktion": zeile.urteil.aktion,
         "grund": zeile.urteil.grund,
-        "extra": _herkunft(zeile, einzelheiten(zeile)),
+        "extra": _herkunft(zeile, "\n".join(teil for teil in (lage(zeile), einzelheiten(zeile)) if teil)),
         "bereich": bereich(zeile),
         **potenzial(zeile),
     }
@@ -92,7 +92,17 @@ def _herkunft(zeile, text: str) -> str:
     quelle = getattr(zeile, "quelle", "")
     if not quelle:
         return text
-    zeile_text = f"Quelle: {quelle} · {getattr(zeile, 'kursart', '') or 'Kurs'} · {getattr(zeile, 'datenstatus', '') or 'ok'}"
+    zeile_text = " · ".join(
+        (
+            f"Quelle: {quelle}",
+            getattr(zeile, "kursart", "") or "Kurs",
+            getattr(zeile, "datenstatus", "") or "ok",
+            f"Kurszeit: {_kurszeit(getattr(zeile, 'kurszeit', None))}",
+            f"Währung: {getattr(zeile, 'waehrung', '') or 'fehlt'}",
+            f"Handelsplatz: {getattr(zeile, 'handelsplatz', '') or 'fehlt'}",
+            _abweich(getattr(zeile, "abweichung", None)),
+        )
+    )
     hinweis = getattr(zeile, "hinweis", "")
     if hinweis:
         zeile_text = f"{zeile_text}\n{hinweis}"
@@ -100,6 +110,18 @@ def _herkunft(zeile, text: str) -> str:
     if gelernt:
         zeile_text = f"{gelernt}\n{zeile_text}"
     return (text + "\n" + zeile_text).strip() if text else zeile_text
+
+
+def _kurszeit(wert) -> str:
+    if not isinstance(wert, int):
+        return "fehlt"
+    return datetime.fromtimestamp(wert, BERLIN).strftime("%d.%m.%Y %H:%M")
+
+
+def _abweich(wert) -> str:
+    if wert is None:
+        return "Abgleich fehlt"
+    return f"Abweichung {de_zahl(wert, 1)} %"
 
 
 def _richtung(zeile):

@@ -102,7 +102,7 @@ class FensterTests(unittest.TestCase):
         gesehen = []
         with patch("beobachter.hole_kurs", return_value=kurs), patch("beobachter.aktualisiere", side_effect=OSError), patch(
             "beobachter.trainiere", side_effect=OSError
-        ), patch("beobachter.time.sleep"):
+        ), patch("fundamental.hole", return_value="fehlt"), patch("beobachter.time.sleep"):
             sammle(("SAP.DE", "ALV.DE"), bei_zeile=gesehen.append)
         self.assertEqual([len(eintrag) for eintrag in gesehen], [1, 2])
 

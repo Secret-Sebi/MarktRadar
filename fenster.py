@@ -163,7 +163,8 @@ def _markiere(bild, arbeitet: bool) -> None:
 
 
 def _viewer() -> Path:
-    if _VIEWER.exists():
+    quelle_neuer = _QUELLE.exists() and (not _VIEWER.exists() or _QUELLE.stat().st_mtime > _VIEWER.stat().st_mtime)
+    if not quelle_neuer and _VIEWER.exists():
         return _VIEWER
     subprocess.run(
         ["swiftc", "-O", "-o", str(_VIEWER), str(_QUELLE), "-framework", "Cocoa", "-framework", "WebKit"],

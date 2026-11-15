@@ -9,7 +9,8 @@ from pathlib import Path
 from analyse import aktion_bei_datenstatus
 from beobachter import haenge_an, lade_liste
 from euro import nach_euro
-from kurse import Bar, Kursdaten
+from fundamental import aus_yahoo, text
+from kurse import Bar, Kursdaten, abweichung_prozent
 from quellen import mit_fallback, plausibel
 from quellen_coingecko import kurs_aus_gecko
 from quellen_stooq import stooq_aus_csv, stooq_kuerzel
@@ -71,6 +72,32 @@ class GeckoTests(unittest.TestCase):
     def test_dollarpreis_wird_nicht_als_euro_beschriftet(self):
         preis = {"bitcoin": {"usd": 100.0, "usd_24h_change": 2.5, "last_updated_at": int(time.time())}}
         self.assertIsNone(kurs_aus_gecko("BTC-USD", "Bitcoin", preis, {"prices": []}))
+
+
+class QualitaetTests(unittest.TestCase):
+    def test_abweichung_braucht_zwei_echte_preise(self):
+        self.assertAlmostEqual(abweichung_prozent(100, 101), 1.0)
+        self.assertIsNone(abweichung_prozent(0, 10))
+        self.assertIsNone(abweichung_prozent(True, 10))
+
+    def test_fundamental_laesst_fehlende_felder_weg(self):
+        roh = {
+            "quoteSummary": {
+                "result": [
+                    {
+                        "assetProfile": {"sector": "Technology"},
+                        "summaryDetail": {"trailingPE": {"raw": 28.5}},
+                        "financialData": {},
+                    }
+                ]
+            }
+        }
+        branche, werte = aus_yahoo(roh)
+        self.assertEqual(branche, "Technology")
+        self.assertEqual(werte, {"KGV": 28.5})
+        self.assertIn("Branche laut Yahoo: Technology", text(branche, werte))
+        self.assertNotIn("Gewinnmarge", text(branche, werte))
+        self.assertEqual(text("", {}), "fehlt")
 
 
 class EuroTests(unittest.TestCase):

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -50,6 +51,7 @@ class Kursdaten:
     kursart: str = "verzoegert"
     handelsplatz: str = ""
     hinweis: str = ""
+    abweichung: float | None = None
 
 
 def gueltiges_symbol(symbol: str) -> bool:
@@ -62,20 +64,65 @@ def hole_kurs(symbol: str, oeffnen=urlopen, fx: dict | None = None) -> Kursdaten
 
     speicher = fx if fx is not None else {}
     daten = mit_fallback(symbol, oeffnen, yahoo_kurs)
-    return nach_euro(daten, lambda code: _wechselkurs(code, oeffnen, speicher))
+    abweichung = _abweichung(symbol, daten, oeffnen)
+    daten = nach_euro(daten, lambda code: _wechselkurs(code, oeffnen, speicher))
+    return replace(daten, abweichung=abweichung)
+
+
+_SPERRE = threading.Lock()
+_ZWEIT: dict[str, tuple[float, float | None]] = {}
+_ZWEIT_PAUSE = 3600
+
+
+def abweichung_prozent(erster: float, zweiter: float) -> float | None:
+    if isinstance(erster, bool) or isinstance(zweiter, bool):
+        return None
+    if not isinstance(erster, (int, float)) or not isinstance(zweiter, (int, float)):
+        return None
+    if erster <= 0 or zweiter <= 0:
+        return None
+    return (zweiter / erster - 1.0) * 100.0
 
 
 def _wechselkurs(waehrung: str, oeffnen, speicher: dict | None = None) -> float | None:
     gemerkt = speicher if speicher is not None else {}
-    if waehrung in gemerkt:
-        return gemerkt[waehrung]
+    with _SPERRE:
+        if waehrung in gemerkt:
+            return gemerkt[waehrung]
     try:
         kurs = yahoo_kurs(f"{waehrung}EUR=X", oeffnen)
     except (ConnectionError, LookupError, ValueError, json.JSONDecodeError):
-        gemerkt[waehrung] = None
+        with _SPERRE:
+            gemerkt[waehrung] = None
         return None
     wert = kurs.preis if kurs.preis > 0 else None
-    gemerkt[waehrung] = wert
+    with _SPERRE:
+        gemerkt[waehrung] = wert
+    return wert
+
+
+def _abweichung(symbol: str, daten: Kursdaten, oeffnen, jetzt: float | None = None) -> float | None:
+    moment = time.time() if jetzt is None else jetzt
+    with _SPERRE:
+        gespeichert = _ZWEIT.get(symbol)
+        if gespeichert is not None and moment - gespeichert[0] < _ZWEIT_PAUSE:
+            return gespeichert[1]
+    try:
+        if symbol.endswith("-USD"):
+            from quellen_coingecko import gecko_kurs
+
+            andere = gecko_kurs(symbol, oeffnen)
+        else:
+            from quellen_stooq import stooq_kurs
+
+            andere = stooq_kurs(symbol, oeffnen)
+    except (ConnectionError, LookupError, TimeoutError, ValueError, json.JSONDecodeError):
+        andere = None
+    wert = None
+    if andere is not None and andere.waehrung == daten.waehrung:
+        wert = abweichung_prozent(daten.preis, andere.preis)
+    with _SPERRE:
+        _ZWEIT[symbol] = (moment, wert)
     return wert
 
 

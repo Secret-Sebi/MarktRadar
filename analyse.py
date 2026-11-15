@@ -4,9 +4,11 @@ Der Score ist kein Gewinnversprechen. Er bündelt nur RSI und gleitende
 Durchschnitte zu einem nachvollziehbaren Hinweis.
 """
 
+from __future__ import annotations
+
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -15,13 +17,13 @@ BERLIN = ZoneInfo("Europe/Berlin")
 @dataclass(frozen=True)
 class Kennzahlen:
     preis: float
-    sma20: Optional[float]
-    sma50: Optional[float]
-    sma200: Optional[float]
-    rsi: Optional[float]
-    hoch_52w: Optional[float]
-    aenderung_5t_pct: Optional[float]
-    aenderung_20t_pct: Optional[float]
+    sma20: float | None
+    sma50: float | None
+    sma200: float | None
+    rsi: float | None
+    hoch_52w: float | None
+    aenderung_5t_pct: float | None
+    aenderung_20t_pct: float | None
     ist_etf: bool
     anzahl_kurse: int
 
@@ -35,14 +37,14 @@ class Urteil:
     hinweis_broker: str
 
 
-def sma(werte: Sequence[float], periode: int) -> Optional[float]:
+def sma(werte: Sequence[float], periode: int) -> float | None:
     if periode <= 0 or len(werte) < periode:
         return None
     fenster = werte[-periode:]
     return sum(fenster) / periode
 
 
-def rsi(werte: Sequence[float], periode: int = 14) -> Optional[float]:
+def rsi(werte: Sequence[float], periode: int = 14) -> float | None:
     if periode <= 0 or len(werte) < periode + 1:
         return None
     aenderungen = tuple(werte[index] - werte[index - 1] for index in range(1, len(werte)))
@@ -54,6 +56,8 @@ def rsi(werte: Sequence[float], periode: int = 14) -> Optional[float]:
         schritt_verlust = -aenderung if aenderung < 0 else 0.0
         gewinn = (gewinn * (periode - 1) + schritt_gewinn) / periode
         verlust = (verlust * (periode - 1) + schritt_verlust) / periode
+    if gewinn == 0 and verlust == 0:
+        return 50.0
     if verlust == 0:
         return 100.0
     if gewinn == 0:
@@ -62,7 +66,7 @@ def rsi(werte: Sequence[float], periode: int = 14) -> Optional[float]:
     return 100.0 - (100.0 / (1.0 + relativ))
 
 
-def abstand_prozent(preis: float, basis: Optional[float]) -> Optional[float]:
+def abstand_prozent(preis: float, basis: float | None) -> float | None:
     if basis is None or basis == 0:
         return None
     return (preis / basis - 1.0) * 100.0
@@ -71,7 +75,7 @@ def abstand_prozent(preis: float, basis: Optional[float]) -> Optional[float]:
 def kennzahlen_aus_schluessen(
     schluesse: Sequence[float],
     ist_etf: bool,
-    hoch_52w: Optional[float],
+    hoch_52w: float | None,
 ) -> Kennzahlen:
     werte = tuple(float(wert) for wert in schluesse)
     anzahl = len(werte)
@@ -127,7 +131,7 @@ def fenster(moment: datetime) -> str:
     return "zu"
 
 
-def soll_melden(vorher: Optional[str], aktion: str) -> bool:
+def soll_melden(vorher: str | None, aktion: str) -> bool:
     if vorher is None:
         return False
     return aktion == "einstieg_pruefen" and vorher != "einstieg_pruefen"
@@ -163,7 +167,7 @@ def de_zahl(wert: float, stellen: int = 2) -> str:
     return vorzeichen + ".".join(reversed(teile)) + "," + bruch
 
 
-def de_prozent(wert: Optional[float]) -> str:
+def de_prozent(wert: float | None) -> str:
     if wert is None:
         return "ohne Wert"
     if wert > 0:
@@ -171,7 +175,7 @@ def de_prozent(wert: Optional[float]) -> str:
     return de_zahl(wert, 1) + " %"
 
 
-def _aenderung(werte: Sequence[float], tage: int) -> Optional[float]:
+def _aenderung(werte: Sequence[float], tage: int) -> float | None:
     if len(werte) <= tage:
         return None
     basis = werte[-(tage + 1)]
@@ -192,7 +196,7 @@ def _score(zahlen: Kennzahlen) -> int:
     punkte += _ruecksetzer_punkte(zahlen)
     if zahlen.aenderung_5t_pct is not None and zahlen.aenderung_5t_pct <= -8:
         punkte -= 12
-    return max(0, min(100, int(round(punkte))))
+    return max(0, min(100, int(round(punkte))))  # noqa: RUF046
 
 
 def _kurzer_ruecksetzer(zahlen: Kennzahlen) -> bool:
@@ -316,7 +320,7 @@ def _broker(aktion: str, ist_etf: bool) -> str:
     return _BROKER[aktion]
 
 
-def _rsi_text(wert: Optional[float]) -> str:
+def _rsi_text(wert: float | None) -> str:
     if wert is None:
         return "ohne RSI"
     return de_zahl(wert, 1)

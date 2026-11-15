@@ -88,6 +88,28 @@ def trainiere(pfad: Path, symbol: str, balken) -> Modell:
     return modell
 
 
+def messe(pfad: Path, symbol: str, balken) -> tuple[int, int] | None:
+    if not pfad.exists():
+        return None
+    with sqlite3.connect(pfad) as verbindung:
+        _tabellen(verbindung)
+        zeilen = verbindung.execute(
+            """
+            SELECT zeit, kategorie, wirkung_5 FROM nachrichten
+            WHERE symbol = ? AND wirkung_5 IS NOT NULL AND kategorie != 'unklar'
+            ORDER BY zeit
+            """,
+            (symbol,),
+        ).fetchall()
+    paare = []
+    for zeit, thema, wirkung_5 in zeilen:
+        eingabe = merkmale(balken, int(zeit), str(thema))
+        if eingabe is None:
+            continue
+        paare.append((eingabe, 1 if float(wirkung_5) > 0 else 0))
+    return trefferquote(tuple(paare))
+
+
 def schaetzung(modell: Modell, balken, thema: str) -> float | None:
     if modell.beispiele < _MINDEST:
         return None
@@ -97,23 +119,48 @@ def schaetzung(modell: Modell, balken, thema: str) -> float | None:
     return wahrscheinlichkeit(modell, eingabe)
 
 
-def aktion_aus_ki(aktion: str, modell: Modell, chance: float | None, daten_ok: bool) -> str:
-    if chance is None or modell.beispiele < _MINDEST:
+def trefferquote(faelle: tuple[tuple[tuple[float, ...], int], ...]) -> tuple[int, int] | None:
+    if len(faelle) < _MINDEST * 2:
+        return None
+    trainingsende = len(faelle) - _MINDEST
+    modell = leeres_modell()
+    for eingabe, ziel in faelle[:trainingsende]:
+        modell = schritt(modell, eingabe, float(ziel))
+    treffer = 0
+    for eingabe, ziel in faelle[trainingsende:]:
+        prognose = 1 if wahrscheinlichkeit(modell, eingabe) >= 0.5 else 0
+        if prognose == ziel:
+            treffer += 1
+    return treffer, _MINDEST
+
+
+def aktion_aus_ki(
+    aktion: str,
+    modell: Modell,
+    chance: float | None,
+    daten_ok: bool,
+    pruefung: tuple[int, int] | None = None,
+) -> str:
+    if pruefung is None or pruefung[1] < _MINDEST:
         return aktion
-    if chance <= 0.35 and aktion in ("einstieg_pruefen", "sparplan"):
+    quote = pruefung[0] / pruefung[1]
+    if quote <= 0.35 and aktion in ("einstieg_pruefen", "sparplan"):
         return "abwarten"
-    if daten_ok and chance >= 0.65 and aktion == "beobachten":
+    if daten_ok and quote >= 0.65 and aktion == "beobachten":
         return "einstieg_pruefen"
     return aktion
 
 
-def ki_satz(modell: Modell, chance: float | None) -> str:
-    if chance is None or modell.beispiele < _MINDEST:
-        return f"Das Modell hat {modell.beispiele} abgeschlossene Fälle gesehen und entscheidet noch nicht mit."
-    prozent = chance * 100.0
+def ki_satz(modell: Modell, chance: float | None, pruefung: tuple[int, int] | None = None) -> str:
+    if pruefung is None or pruefung[1] < _MINDEST:
+        return (
+            f"Das Modell hat {modell.beispiele} Fälle gesehen. "
+            "Eine Prozentzahl gibt es erst nach einem Test an späteren Fällen, die nicht zum Lernen verwendet wurden."
+        )
+    treffer, anzahl = pruefung
     return (
-        f"Das Modell schätzt nach {modell.beispiele} Fällen eine Chance von {prozent:.0f} % "
-        "auf ein Plus nach 5 Handelstagen. Das ist keine Garantie."
+        f"Im Test an {anzahl} späteren Fällen lag das Modell {treffer}-mal richtig. "
+        "Das ist die gemessene Trefferquote, keine Chance für den nächsten Kurs."
     )
 
 
