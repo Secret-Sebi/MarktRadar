@@ -48,15 +48,23 @@ class AnsichtTests(unittest.TestCase):
 
     def test_potenzial_fehlt_ohne_kurse_und_ist_hoch_beim_pruefen(self):
         offen = _Zeile("BMW.DE", "BMW", "unvollstaendig")
+        offen.faelle = 4
         offen.urteil.score = 0
         self.assertIsNone(potenzial(offen)["score"])
         self.assertIn("fehlen vollständige Kurse", potenzial(offen)["text"])
         hoch = _Zeile("SAP.DE", "SAP", "einstieg_pruefen")
+        hoch.faelle = 0
         hoch.urteil.score = 80
         hoch.urteil.grund = "Rücksetzer im Aufwärtstrend."
+        ohne = potenzial(hoch)
+        self.assertIsNone(ohne["score"])
+        self.assertFalse(ohne["gelernt"])
+        self.assertIn("noch nichts gelernt", ohne["text"])
+        hoch.faelle = 2
         ergebnis = potenzial(hoch)
         self.assertEqual(ergebnis["stufe"], "hoch")
         self.assertEqual(ergebnis["score"], 80)
+        self.assertTrue(ergebnis["gelernt"])
         self.assertIn("keine Gewinnzusage", ergebnis["text"])
 
 

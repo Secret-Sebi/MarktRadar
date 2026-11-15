@@ -1,14 +1,17 @@
 """Kursdaten von Yahoo Finance. Das ist nicht der Preis in Trade Republic."""
 
+from __future__ import annotations
+
 import json
 import re
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _SYMBOL = re.compile(r"^[A-Z0-9^=.-]{1,15}$")
 _YAHOO = (
@@ -19,13 +22,13 @@ _YAHOO = (
 
 @dataclass(frozen=True)
 class Bar:
-    zeit: Optional[int]
-    oeffnen: Optional[float]
-    hoch: Optional[float]
-    tief: Optional[float]
+    zeit: int | None
+    oeffnen: float | None
+    hoch: float | None
+    tief: float | None
     schluss: float
     bereinigt: float
-    volumen: Optional[float]
+    volumen: float | None
 
 
 @dataclass(frozen=True)
@@ -34,24 +37,53 @@ class Kursdaten:
     name: str
     waehrung: str
     preis: float
-    tag_pct: Optional[float]
+    tag_pct: float | None
     ist_etf: bool
-    schluesse: Tuple[float, ...]
-    hoch_52w: Optional[float]
-    tief_52w: Optional[float] = None
-    balken: Tuple[Bar, ...] = ()
+    schluesse: tuple[float, ...]
+    hoch_52w: float | None
+    tief_52w: float | None = None
+    balken: tuple[Bar, ...] = ()
     hat_bereinigt: bool = False
+    quelle: str = "Yahoo Finance"
+    kurszeit: int | None = None
+    datenstatus: str = "ok"
+    kursart: str = "verzoegert"
+    handelsplatz: str = ""
+    hinweis: str = ""
 
 
 def gueltiges_symbol(symbol: str) -> bool:
     return _SYMBOL.fullmatch(symbol) is not None
 
 
-def hole_kurs(symbol: str, oeffnen=urlopen) -> Kursdaten:
+def hole_kurs(symbol: str, oeffnen=urlopen, fx: dict | None = None) -> Kursdaten:
+    from euro import nach_euro
+    from quellen import mit_fallback
+
+    speicher = fx if fx is not None else {}
+    daten = mit_fallback(symbol, oeffnen, yahoo_kurs)
+    return nach_euro(daten, lambda code: _wechselkurs(code, oeffnen, speicher))
+
+
+def _wechselkurs(waehrung: str, oeffnen, speicher: dict | None = None) -> float | None:
+    gemerkt = speicher if speicher is not None else {}
+    if waehrung in gemerkt:
+        return gemerkt[waehrung]
+    try:
+        kurs = yahoo_kurs(f"{waehrung}EUR=X", oeffnen)
+    except (ConnectionError, LookupError, ValueError, json.JSONDecodeError):
+        gemerkt[waehrung] = None
+        return None
+    wert = kurs.preis if kurs.preis > 0 else None
+    gemerkt[waehrung] = wert
+    return wert
+
+
+def yahoo_kurs(symbol: str, oeffnen=urlopen) -> Kursdaten:
     if not gueltiges_symbol(symbol):
         raise ValueError("Ungültiges Kürzel")
     adresse = _YAHOO.format(symbol=quote(symbol, safe=""))
-    anfrage = Request(adresse, headers={"User-Agent": "Beobachter/1.0"})
+    anfrage = Request(adresse, headers={"User-Agent": "MarktRadar/1.0"})
     try:
         with oeffnen(anfrage, timeout=12) as antwort:
             roh = antwort.read()
@@ -63,7 +95,16 @@ def hole_kurs(symbol: str, oeffnen=urlopen) -> Kursdaten:
     return daten
 
 
-def kurse_aus_antwort(payload: dict) -> Optional[Kursdaten]:
+def _datenstatus(kurszeit: int | None, jetzt: int | None = None) -> str:
+    if kurszeit is None:
+        return "ok"
+    alter = (int(time.time()) if jetzt is None else jetzt) - kurszeit
+    if alter > 10 * 24 * 3600:
+        return "veraltet"
+    return "ok"
+
+
+def kurse_aus_antwort(payload: dict) -> Kursdaten | None:
     block = _erster_block(payload)
     if block is None:
         return None
@@ -89,6 +130,7 @@ def kurse_aus_antwort(payload: dict) -> Optional[Kursdaten]:
     schluesse = tuple(bar.bereinigt for bar in balken)
     preis = _optional_float(meta.get("regularMarketPrice")) or balken[-1].schluss
     name = meta.get("longName") or meta.get("shortName") or meta.get("symbol") or ""
+    kurszeit = _zeitstempel(meta.get("regularMarketTime")) or balken[-1].zeit
     return Kursdaten(
         symbol=str(meta.get("symbol") or ""),
         name=_name(str(name)),
@@ -101,6 +143,12 @@ def kurse_aus_antwort(payload: dict) -> Optional[Kursdaten]:
         tief_52w=_optional_float(meta.get("fiftyTwoWeekLow")),
         balken=balken,
         hat_bereinigt=bool(bereinigt),
+        quelle="Yahoo Finance",
+        kurszeit=kurszeit,
+        datenstatus=_datenstatus(kurszeit),
+        kursart="verzoegert",
+        handelsplatz=str(meta.get("exchangeName") or meta.get("fullExchangeName") or ""),
+        hinweis="Verzögerter Yahoo-Finance-Kurs, kein Echtzeit-Feed und nicht der Brokerpreis.",
     )
 
 
@@ -112,10 +160,10 @@ def balken_bauen(
     schluesse: Sequence[object],
     volumen: Sequence[object],
     bereinigt: Sequence[object],
-    live: Optional[float],
-    live_zeit: Optional[int],
+    live: float | None,
+    live_zeit: int | None,
     zeitzone: str,
-) -> Tuple[Bar, ...]:
+) -> tuple[Bar, ...]:
     roh = _roh_balken(zeiten, oeffnen, hochs, tiefs, schluesse, volumen, bereinigt)
     if not roh or live is None:
         return roh
@@ -130,7 +178,7 @@ def balken_bauen(
     return roh
 
 
-def _schluesse(roh: Sequence[object], live) -> Tuple[float, ...]:
+def _schluesse(roh: Sequence[object], live) -> tuple[float, ...]:
     werte = tuple(float(wert) for wert in roh if isinstance(wert, (int, float)) and not isinstance(wert, bool))
     live_preis = _optional_float(live)
     if live_preis is None or not werte:
@@ -138,7 +186,7 @@ def _schluesse(roh: Sequence[object], live) -> Tuple[float, ...]:
     return werte[:-1] + (live_preis,)
 
 
-def _tag_pct(meta: dict, schluesse: Tuple[float, ...]) -> Optional[float]:
+def _tag_pct(meta: dict, schluesse: tuple[float, ...]) -> float | None:
     # chartPreviousClose ist der Kurs am Anfang der abgefragten Spanne, nicht der Vortag.
     prozent = meta.get("regularMarketChangePercent")
     if isinstance(prozent, (int, float)) and not isinstance(prozent, bool):
@@ -148,7 +196,7 @@ def _tag_pct(meta: dict, schluesse: Tuple[float, ...]) -> Optional[float]:
     return None
 
 
-def _optional_float(wert) -> Optional[float]:
+def _optional_float(wert) -> float | None:
     if isinstance(wert, bool) or not isinstance(wert, (int, float)):
         return None
     return float(wert)
@@ -182,13 +230,13 @@ def _adjclose(block: dict):
     return adj[0].get("adjclose") or ()
 
 
-def _zeitstempel(wert) -> Optional[int]:
+def _zeitstempel(wert) -> int | None:
     if isinstance(wert, bool) or not isinstance(wert, (int, float)):
         return None
     return int(wert)
 
 
-def _roh_balken(zeiten, oeffnen, hochs, tiefs, schluesse, volumen, bereinigt) -> Tuple[Bar, ...]:
+def _roh_balken(zeiten, oeffnen, hochs, tiefs, schluesse, volumen, bereinigt) -> tuple[Bar, ...]:
     laenge = max(len(schluesse), len(bereinigt))
     balken = []
     for index in range(laenge):
@@ -232,11 +280,11 @@ def _neuer_tag(vorgaenger: Bar, live: float, zeit: int) -> Bar:
     return Bar(zeit, live, live, live, live, live * faktor, None)
 
 
-def _tag(zeit: Optional[int], zeitzone: str):
+def _tag(zeit: int | None, zeitzone: str):
     if zeit is None:
         return None
     try:
         zone = ZoneInfo(zeitzone)
-    except Exception:
+    except (ZoneInfoNotFoundError, ValueError):
         zone = ZoneInfo("UTC")
     return datetime.fromtimestamp(zeit, zone).date()

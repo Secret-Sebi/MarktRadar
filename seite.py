@@ -3,7 +3,8 @@
 from datetime import datetime
 from pathlib import Path
 
-from analyse import BERLIN, fenster as handelsfenster, handels_hinweis
+from analyse import BERLIN, handels_hinweis
+from analyse import fenster as handelsfenster
 from ansicht import briefing, einzelheiten, kurzname, potenzial
 from beobachter import _kurs_prozent, _preis, _sortiert, _warte_text
 
@@ -81,11 +82,24 @@ def _karte(zeile) -> dict:
         "titel": zeile.urteil.titel,
         "aktion": zeile.urteil.aktion,
         "grund": zeile.urteil.grund,
-        "extra": einzelheiten(zeile),
-        "reihe": tuple(round(float(wert), 4) for wert in getattr(zeile, "reihe", ()) or ()),
+        "extra": _herkunft(zeile, einzelheiten(zeile)),
         "bereich": bereich(zeile),
         **potenzial(zeile),
     }
+
+
+def _herkunft(zeile, text: str) -> str:
+    quelle = getattr(zeile, "quelle", "")
+    if not quelle:
+        return text
+    zeile_text = f"Quelle: {quelle} · {getattr(zeile, 'kursart', '') or 'Kurs'} · {getattr(zeile, 'datenstatus', '') or 'ok'}"
+    hinweis = getattr(zeile, "hinweis", "")
+    if hinweis:
+        zeile_text = f"{zeile_text}\n{hinweis}"
+    gelernt = getattr(zeile, "lernen", "")
+    if gelernt:
+        zeile_text = f"{gelernt}\n{zeile_text}"
+    return (text + "\n" + zeile_text).strip() if text else zeile_text
 
 
 def _richtung(zeile):

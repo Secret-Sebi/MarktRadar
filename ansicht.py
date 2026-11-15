@@ -1,9 +1,8 @@
 """Texte für das Fenster. Dieselbe Bewertung, in ganzen Sätzen."""
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from analyse import de_prozent, de_zahl
-
 
 _SAETZE = (
     ("einstieg_pruefen", "Zum Prüfen liegen {namen} vorn."),
@@ -11,6 +10,7 @@ _SAETZE = (
     ("beobachten", "Ohne klaren Vorteil bleiben {namen}."),
     ("abwarten", "Schon gelaufen, deshalb kein Nachkauf: {namen}."),
     ("vorsicht", "Im Abwärtstrend liegen {namen}."),
+    ("verkauf_pruefen", "Verkauf prüfen, ohne Auftrag: {namen}."),
     ("unklar", "Noch unklar sind {namen}."),
     ("unvollstaendig", "Zu wenig Daten haben {namen}."),
     ("fehler", "Gerade nicht geladen sind {namen}."),
@@ -47,18 +47,27 @@ def briefing(zeilen: Sequence) -> str:
 
 
 def potenzial(zeile) -> dict:
+    if int(getattr(zeile, "faelle", 0) or 0) <= 0:
+        return {
+            "stufe": "offen",
+            "score": None,
+            "gelernt": False,
+            "text": "Zu dieser Aktie habe ich noch nichts gelernt. Deshalb nenne ich kein Potenzial.",
+        }
     aktion = zeile.urteil.aktion
     score = int(zeile.urteil.score)
     if aktion in ("fehler", "unklar", "unvollstaendig"):
         return {
             "stufe": "offen",
             "score": None,
+            "gelernt": True,
             "text": "Zum Potenzial sage ich noch nichts. Dafür fehlen vollständige Kurse.",
         }
     stufe, kopf = _potenzial_stufe(aktion, score)
     return {
         "stufe": stufe,
         "score": score,
+        "gelernt": True,
         "text": f"{kopf}. Score {score} von 100. {zeile.urteil.grund} Das ist keine Gewinnzusage.",
     }
 

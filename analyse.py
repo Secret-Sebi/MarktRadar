@@ -93,6 +93,14 @@ def kennzahlen_aus_schluessen(
     )
 
 
+def aktion_bei_datenstatus(aktion: str, datenstatus: str) -> str:
+    if datenstatus == "ok":
+        return aktion
+    if aktion in ("einstieg_pruefen", "sparplan"):
+        return "unvollstaendig"
+    return aktion
+
+
 def urteilen(zahlen: Kennzahlen) -> Urteil:
     score = _score(zahlen)
     aktion = _aktion(zahlen, score)

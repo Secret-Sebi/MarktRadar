@@ -2,10 +2,12 @@ import json
 import unittest
 import urllib.request
 from datetime import datetime
+from unittest.mock import patch
 
 from analyse import BERLIN, Urteil
-from beobachter import Zeile
+from beobachter import Zeile, sammle
 from fenster import mach_server
+from kurse import Kursdaten, _wechselkurs
 from seite import seite_html, stand_bauen
 
 
@@ -15,7 +17,9 @@ class FensterTests(unittest.TestCase):
         self.assertIn("#3dff9a", html)
         self.assertIn("function graph", html)
         self.assertIn("EINSCHÄTZUNG", html)
+        self.assertNotIn("const klein = graph", html)
         self.assertIn("Suchen", html)
+        self.assertIn("stand.status || \"Die Kurse kommen.\"", html)
         self.assertNotIn("tkinter", html)
 
     def test_stand_zeigt_namen_kurs_und_wochenende(self):
@@ -34,9 +38,9 @@ class FensterTests(unittest.TestCase):
         self.assertEqual(stand["karten"][0]["preis"], "213,45 EUR")
         self.assertEqual(stand["karten"][0]["richtung"], "hoch")
         self.assertIn("Trade Republic", stand["karten"][0]["extra"])
-        self.assertEqual(stand["karten"][0]["stufe"], "niedrig")
-        self.assertIn("Potenzial niedrig", stand["karten"][0]["text"])
-        self.assertIn("keine Gewinnzusage", stand["karten"][0]["text"])
+        self.assertEqual(stand["karten"][0]["stufe"], "offen")
+        self.assertFalse(stand["karten"][0]["gelernt"])
+        self.assertIn("noch nichts gelernt", stand["karten"][0]["text"])
         self.assertEqual(stand["karten"][0]["bereich"], "Deutschland")
 
     def test_kursreihe_behaelt_anfang_und_ende(self):
@@ -57,7 +61,8 @@ class FensterTests(unittest.TestCase):
             reihe=reihe,
         )
         stand = stand_bauen((zeile,), datetime(2026, 11, 14, 15, 0, tzinfo=BERLIN), 900)
-        self.assertEqual(stand["karten"][0]["reihe"], reihe)
+        self.assertNotIn("reihe", stand["karten"][0])
+        self.assertFalse(stand["karten"][0]["gelernt"])
 
     def test_bereiche_trennen_krypto_usa_und_etf(self):
         from seite import bereich
@@ -91,6 +96,23 @@ class FensterTests(unittest.TestCase):
             gelesen = json.load(antwort)
         self.assertIn("MarktRadar", seite)
         self.assertEqual(gelesen["pille"], "Wochenende")
+
+    def test_jede_zeile_kommt_sofort_ins_fenster(self):
+        kurs = Kursdaten("SAP.DE", "SAP", "EUR", 10.0, 0.0, False, tuple(float(wert) for wert in range(1, 31)), 30.0)
+        gesehen = []
+        with patch("beobachter.hole_kurs", return_value=kurs), patch("beobachter.aktualisiere", side_effect=OSError), patch(
+            "beobachter.trainiere", side_effect=OSError
+        ), patch("beobachter.time.sleep"):
+            sammle(("SAP.DE", "ALV.DE"), bei_zeile=gesehen.append)
+        self.assertEqual([len(eintrag) for eintrag in gesehen], [1, 2])
+
+    def test_wechselkurs_wird_nur_einmal_geholt(self):
+        kurs = Kursdaten("USDEUR=X", "Euro", "EUR", 0.9, None, False, (0.9,), 0.9)
+        speicher = {}
+        with patch("kurse.yahoo_kurs", return_value=kurs) as yahoo:
+            self.assertEqual(_wechselkurs("USD", None, speicher), 0.9)
+            self.assertEqual(_wechselkurs("USD", None, speicher), 0.9)
+        self.assertEqual(yahoo.call_count, 1)
 
 
 class _Etf:

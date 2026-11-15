@@ -13,25 +13,29 @@ Einmal anzeigen und beenden:
 Es öffnet keinen Server, kein Fenster und kein Trade-Republic-Konto.
 """
 
+from __future__ import annotations
+
 import json
 import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Sequence, TextIO, Tuple
+from typing import TextIO
 
 from analyse import (
     BERLIN,
     Kennzahlen,
     Urteil,
     abstand_prozent,
+    aktion_bei_datenstatus,
     de_prozent,
     de_zahl,
-    fenster,
     fehler_urteil,
+    fenster,
     handels_hinweis,
     kennzahlen_aus_schluessen,
     soll_melden,
@@ -39,7 +43,9 @@ from analyse import (
     urteilen,
 )
 from database import signal_speichern
-from kurse import hole_kurs
+from ki import aktion_aus_ki, ki_satz, schaetzung, trainiere
+from kurse import gueltiges_symbol, hole_kurs
+from lernen import aktion_aus_lernen, aktion_aus_verkauf, aktualisiere, satz
 from technik import berechne, vergleichsindex
 
 ORDNER = Path(__file__).resolve().parent
@@ -95,6 +101,7 @@ _RANG = (
     "beobachten",
     "abwarten",
     "vorsicht",
+    "verkauf_pruefen",
     "unklar",
     "unvollstaendig",
     "fehler",
@@ -105,6 +112,7 @@ _GRUPPE = {
     "beobachten": "KEIN KLARER VORTEIL",
     "abwarten": "NICHT HINTERHERLAUFEN",
     "vorsicht": "ABWÄRTSTREND",
+    "verkauf_pruefen": "VERKAUF PRÜFEN",
     "unklar": "ZU WENIG DATEN",
     "unvollstaendig": "DATEN UNVOLLSTÄNDIG",
     "fehler": "NICHT GELADEN",
@@ -115,6 +123,7 @@ _FARBE = {
     "beobachten": "\033[37m",
     "abwarten": "\033[90m",
     "vorsicht": "\033[31m",
+    "verkauf_pruefen": "\033[31m",
     "unklar": "\033[90m",
     "unvollstaendig": "\033[90m",
     "fehler": "\033[31m",
@@ -127,12 +136,18 @@ class Zeile:
     symbol: str
     name: str
     waehrung: str
-    preis: Optional[float]
-    tag_pct: Optional[float]
+    preis: float | None
+    tag_pct: float | None
     urteil: Urteil
-    kennzahlen: Optional[Kennzahlen]
-    technik: Optional[object] = None
-    reihe: Tuple[float, ...] = ()
+    kennzahlen: Kennzahlen | None
+    technik: object | None = None
+    reihe: tuple[float, ...] = ()
+    quelle: str = ""
+    datenstatus: str = ""
+    kursart: str = ""
+    lernen: str = ""
+    hinweis: str = ""
+    faelle: int = 0
 
 
 def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
@@ -150,8 +165,8 @@ def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
 
 def lauf(
     einmal: bool,
-    sekunden: Optional[int],
-    symbole_arg: Tuple[str, ...],
+    sekunden: int | None,
+    symbole_arg: tuple[str, ...],
     ausgabe: TextIO,
     uhr=datetime.now,
     schlaf=time.sleep,
@@ -176,9 +191,9 @@ def lauf(
         schlaf(naechste)
 
 
-def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinweis=None):
+def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinweis=None, bei_zeile=None):
     moment = uhr(BERLIN)
-    zeilen = sammle(symbole)
+    zeilen = sammle(symbole, bei_zeile=bei_zeile)
     naechste = warte_sekunden(moment, sekunden)
     zustand, meldungen = zustand_nach_runde(zustand, zeilen, moment.isoformat(timespec="minutes"))
     speichere_zustand(ZUSTAND, zustand)
@@ -187,7 +202,7 @@ def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinwei
     return moment, zeilen, zustand, naechste
 
 
-def lese_argumente(argv: Sequence[str]) -> Tuple[bool, Optional[int], Tuple[str, ...], bool]:
+def lese_argumente(argv: Sequence[str]) -> tuple[bool, int | None, tuple[str, ...], bool]:
     einmal = False
     terminal = False
     sekunden = None
@@ -216,7 +231,7 @@ def lese_argumente(argv: Sequence[str]) -> Tuple[bool, Optional[int], Tuple[str,
     return einmal, sekunden, tuple(symbole), terminal
 
 
-def warte_sekunden(moment: datetime, vorgabe: Optional[int]) -> int:
+def warte_sekunden(moment: datetime, vorgabe: int | None) -> int:
     if vorgabe is not None:
         return max(60, vorgabe)
     if fenster(moment) in ("xetra", "bestpreis"):
@@ -224,7 +239,7 @@ def warte_sekunden(moment: datetime, vorgabe: Optional[int]) -> int:
     return 900
 
 
-def lade_liste(pfad: Path) -> Tuple[str, ...]:
+def lade_liste(pfad: Path) -> tuple[str, ...]:
     if not pfad.exists():
         pfad.write_text(_STANDARD_LISTE, encoding="utf-8")
     roh = []
@@ -232,7 +247,22 @@ def lade_liste(pfad: Path) -> Tuple[str, ...]:
         text = zeile.split("#", 1)[0].strip().upper()
         if text:
             roh.append(text)
-    return tuple(dict.fromkeys(roh))[:48]
+    return tuple(dict.fromkeys(roh))
+
+
+def haenge_an(pfad: Path, symbol: str) -> str:
+    symbol = symbol.strip().upper()
+    if not gueltiges_symbol(symbol):
+        raise ValueError("Ungültiges Kürzel")
+    if not pfad.exists():
+        pfad.write_text(symbol + "\n", encoding="utf-8")
+        return "hinzugefuegt"
+    text = pfad.read_text(encoding="utf-8")
+    if symbol in lade_liste(pfad):
+        return "vorhanden"
+    prefix = "" if text.endswith("\n") or not text else "\n"
+    pfad.write_text(text + prefix + symbol + "\n", encoding="utf-8")
+    return "hinzugefuegt"
 
 
 def lade_zustand(pfad: Path) -> dict:
@@ -269,32 +299,35 @@ def zustand_nach_runde(alt: dict, zeilen: Sequence[Zeile], zeit: str):
     return {"symbole": neu}, tuple(meldungen)
 
 
-def sammle(symbole: Sequence[str]) -> Tuple[Zeile, ...]:
-    maerkte = _maerkte(symbole)
-    zeilen: Tuple[Zeile, ...] = ()
+def sammle(symbole: Sequence[str], bei_zeile=None) -> tuple[Zeile, ...]:
+    fx: dict = {}
+    maerkte = _maerkte(symbole, fx)
+    zeilen: tuple[Zeile, ...] = ()
     for index, symbol in enumerate(symbole):
         if index or maerkte:
             time.sleep(PAUSE_SEKUNDEN)
-        zeilen = zeilen + (bewerte(symbol, maerkte.get(vergleichsindex(symbol))),)
+        zeilen = zeilen + (bewerte(symbol, maerkte.get(vergleichsindex(symbol)), fx),)
+        if bei_zeile is not None:
+            bei_zeile(zeilen)
     return zeilen
 
 
-def _maerkte(symbole: Sequence[str]) -> dict:
+def _maerkte(symbole: Sequence[str], fx: dict | None = None) -> dict:
     indizes = tuple(dict.fromkeys(vergleichsindex(symbol) for symbol in symbole))
     maerkte = {}
     for index, symbol in enumerate(indizes):
         if index:
             time.sleep(PAUSE_SEKUNDEN)
         try:
-            maerkte[symbol] = hole_kurs(symbol)
+            maerkte[symbol] = hole_kurs(symbol, fx=fx)
         except (ConnectionError, LookupError, ValueError, json.JSONDecodeError):
             maerkte[symbol] = None
     return maerkte
 
 
-def bewerte(symbol: str, markt=None) -> Zeile:
+def bewerte(symbol: str, markt=None, fx: dict | None = None) -> Zeile:
     try:
-        daten = hole_kurs(symbol)
+        daten = hole_kurs(symbol, fx=fx)
     except (ConnectionError, LookupError, ValueError, json.JSONDecodeError) as fehler:
         return _fehler(symbol, str(fehler))
     zahlen = kennzahlen_aus_schluessen(daten.schluesse, daten.ist_etf, daten.hoch_52w)
@@ -308,6 +341,59 @@ def bewerte(symbol: str, markt=None) -> Zeile:
         daten.tief_52w,
     )
     urteil = urteilen(zahlen) if technik.vollstaendig else unvollstaendig_urteil(technik.fehlend)
+    if aktion_bei_datenstatus(urteil.aktion, daten.datenstatus or "ok") != urteil.aktion:
+        urteil = unvollstaendig_urteil((daten.hinweis or "Die Kursdaten sind nicht verlässlich genug.",))
+    lern_satz = ""
+    thema = "unklar"
+    befund = None
+    try:
+        befund = aktualisiere(DATENBANK, daten.symbol or symbol, daten.name or symbol, daten.balken)
+        lern_satz = satz(befund)
+        thema = befund.kategorie
+        if aktion_aus_lernen(urteil.aktion, befund.anzahl, befund.median) != urteil.aktion:
+            urteil = Urteil(
+                "abwarten",
+                urteil.score,
+                "Nicht hinterherlaufen",
+                urteil.grund,
+                "Die bisherigen Fälle sprechen gegen einen Einstieg. Die Beobachtung läuft weiter.",
+            )
+    except (OSError, sqlite3.Error):
+        lern_satz = "Die bisherigen Nachrichten konnten nicht gespeichert werden."
+    try:
+        modell = trainiere(DATENBANK, daten.symbol or symbol, daten.balken)
+        chance = schaetzung(modell, daten.balken, thema)
+        lern_satz = f"{lern_satz} {ki_satz(modell, chance)}".strip()
+        neue_aktion = aktion_aus_ki(urteil.aktion, modell, chance, (daten.datenstatus or "ok") == "ok")
+        if neue_aktion == "abwarten" and neue_aktion != urteil.aktion:
+            urteil = Urteil(
+                "abwarten",
+                urteil.score,
+                "Nicht hinterherlaufen",
+                urteil.grund,
+                "Das Modell spricht gegen einen Einstieg. Die Beobachtung läuft weiter.",
+            )
+        elif neue_aktion == "einstieg_pruefen" and neue_aktion != urteil.aktion:
+            urteil = Urteil(
+                "einstieg_pruefen",
+                urteil.score,
+                "Prüfen",
+                urteil.grund,
+                "Das Modell sieht ein Plus als wahrscheinlicher. In Trade Republic den Preis selbst prüfen.",
+            )
+        urteil = Urteil(urteil.aktion, urteil.score, urteil.titel, f"{lern_satz} {urteil.grund}".strip(), urteil.hinweis_broker)
+    except (OSError, sqlite3.Error):
+        pass
+    if befund is not None and aktion_aus_verkauf(
+        urteil.aktion, befund.eigene, befund.eigene_median, (daten.datenstatus or "ok") == "ok"
+    ) == "verkauf_pruefen":
+        urteil = Urteil(
+            "verkauf_pruefen",
+            urteil.score,
+            "Verkauf prüfen",
+            urteil.grund,
+            "Kein Auftrag. In Trade Republic selbst prüfen, ob du verkaufen willst.",
+        )
     return Zeile(
         symbol=daten.symbol or symbol,
         name=daten.name or symbol,
@@ -318,6 +404,12 @@ def bewerte(symbol: str, markt=None) -> Zeile:
         kennzahlen=zahlen,
         technik=technik,
         reihe=_kursreihe(tuple(balken.schluss for balken in daten.balken)),
+        quelle=daten.quelle,
+        datenstatus=daten.datenstatus,
+        kursart=daten.kursart,
+        lernen=lern_satz,
+        hinweis=daten.hinweis,
+        faelle=0 if befund is None else befund.eigene,
     )
 
 
@@ -326,7 +418,7 @@ def bildschirm(zeilen: Sequence[Zeile], moment: datetime, naechste: int, farbig:
     kopf = (
         f"MARKTRADAR  {_TAGE[berlin.weekday()]} {berlin:%d.%m.%Y %H:%M} Uhr Berlin\n"
         "Nur dieses MacBook. Keine App, kein Konto, es wird nichts gekauft.\n"
-        "Keine Anlageberatung. Der Yahoo-Kurs kann vom Preis in Trade Republic abweichen.\n"
+        "Keine Anlageberatung. Der angezeigte Kurs kann vom Preis in Trade Republic abweichen.\n"
         "Der große Preis ist der letzte Marktkurs. Die Rechnung gleicht Aktiensplits aus.\n"
         f"{handels_hinweis(moment)}\n"
         "Feiertage prüft das Programm nicht.\n"
@@ -345,7 +437,7 @@ def macos_hinweis(titel: str, text: str) -> bool:
         f"display notification {_applescript(text[:180])} "
         f"with title {_applescript(titel[:80])}"
     )
-    ergebnis = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    ergebnis = subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
     return ergebnis.returncode == 0
 
 
@@ -364,6 +456,10 @@ def _karte(zeile: Zeile) -> str:
         f"{zeile.symbol}  {zeile.name}",
         f"           {_preis(zeile)}   {_kurs_prozent(zeile.tag_pct)} letzter Handelstag   {score}",
     ]
+    if zeile.quelle:
+        zeilen.append(f"           {zeile.quelle} · {zeile.kursart or 'Kurs'} · {zeile.datenstatus or 'ok'}")
+    if zeile.lernen:
+        zeilen.append(_umbruch(zeile.lernen, 11))
     if zeile.kennzahlen is not None and zeile.urteil.aktion != "unvollstaendig":
         zeilen.append("           " + _details(zeile.kennzahlen))
     zeilen.extend(_technikzeilen(zeile.technik))
@@ -393,7 +489,7 @@ def _preis(zeile: Zeile) -> str:
     return f"{betrag} {zeile.waehrung}".rstrip()
 
 
-def _sortiert(zeilen: Sequence[Zeile]) -> Tuple[Zeile, ...]:
+def _sortiert(zeilen: Sequence[Zeile]) -> tuple[Zeile, ...]:
     rang = {name: index for index, name in enumerate(_RANG)}
     return tuple(sorted(zeilen, key=lambda zeile: (rang.get(zeile.urteil.aktion, 99), -zeile.urteil.score)))
 
@@ -414,7 +510,7 @@ def _umbruch(text: str, einzug: int) -> str:
     return "\n".join((" " * einzug) + zeile for zeile in zeilen)
 
 
-def _kursreihe(werte, maximum: int = 80) -> Tuple[float, ...]:
+def _kursreihe(werte, maximum: int = 80) -> tuple[float, ...]:
     fenster = tuple(werte)[-180:]
     if len(fenster) <= maximum:
         return tuple(round(float(wert), 4) for wert in fenster)
@@ -434,7 +530,7 @@ def _melde(meldungen: Sequence[Zeile], hinweis) -> None:
         hinweis(f"{zeile.symbol}: prüfen", zeile.urteil.grund)
 
 
-def _technikzeilen(technik) -> Tuple[str, ...]:
+def _technikzeilen(technik) -> tuple[str, ...]:
     if technik is None:
         return ()
     muster = ", ".join(technik.muster) if technik.muster else "Kein besonderes Muster"
@@ -468,7 +564,7 @@ def _relativ_text(technik) -> str:
     return f"gegen {name} {de_prozent(technik.relativ).replace(' %', '')} Punkte"
 
 
-def _opt_zahl(wert: Optional[float]) -> str:
+def _opt_zahl(wert: float | None) -> str:
     if wert is None:
         return "—"
     return de_zahl(wert, 1 if abs(wert) < 100 else 2)
@@ -521,7 +617,7 @@ def _warte_text(sekunden: int) -> str:
     return f"{sekunden // 60} Minuten"
 
 
-def _kurs_prozent(wert: Optional[float]) -> str:
+def _kurs_prozent(wert: float | None) -> str:
     if wert is None:
         return "—"
     return de_prozent(wert)
