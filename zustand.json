@@ -1,0 +1,132 @@
+{
+  "symbole": {
+    "BTC-USD": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "ETH-USD": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "SOL-USD": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "NVDA": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "AAPL": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "MSFT": {
+      "aktion": "einstieg_pruefen",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "AMZN": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "GOOGL": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "META": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "TSLA": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "AMD": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "AVGO": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "NFLX": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "SAP.DE": {
+      "aktion": "beobachten",
+      "seit": "2026-11-15T06:17+01:00"
+    },
+    "SIE.DE": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:03+01:00"
+    },
+    "ALV.DE": {
+      "aktion": "abwarten",
+      "seit": "2026-11-14T15:03+01:00"
+    },
+    "BMW.DE": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:03+01:00"
+    },
+    "IFX.DE": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:03+01:00"
+    },
+    "RHM.DE": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:03+01:00"
+    },
+    "MBG.DE": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "DTE.DE": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "AIR.DE": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "ADS.DE": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "VOW3.DE": {
+      "aktion": "vorsicht",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "DBK.DE": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "BAYN.DE": {
+      "aktion": "abwarten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "BAS.DE": {
+      "aktion": "beobachten",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "VWCE.DE": {
+      "aktion": "sparplan",
+      "seit": "2026-11-14T15:03+01:00"
+    },
+    "SXR8.DE": {
+      "aktion": "sparplan",
+      "seit": "2026-11-14T15:03+01:00"
+    },
+    "EUNL.DE": {
+      "aktion": "sparplan",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "EXS1.DE": {
+      "aktion": "sparplan",
+      "seit": "2026-11-14T15:37+01:00"
+    },
+    "QDVE.DE": {
+      "aktion": "einstieg_pruefen",
+      "seit": "2026-11-14T15:37+01:00"
+    }
+  }
+}

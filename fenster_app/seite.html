@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MarktRadar</title>
+<style>
+  :root { color-scheme: dark; --gruen: #3dff9a; --cyan: #7af6ff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; color: #e9fff4; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, sans-serif;
+    background:
+      radial-gradient(900px 420px at 0% -10%, rgba(61, 255, 154, .18), transparent 60%),
+      radial-gradient(700px 380px at 100% 0%, rgba(122, 246, 255, .1), transparent 55%),
+      linear-gradient(rgba(61, 255, 154, .045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(61, 255, 154, .045) 1px, transparent 1px),
+      #050a08;
+    background-size: auto, auto, 56px 56px, 56px 56px, auto;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 18px 28px 12px;
+    border-bottom: 1px solid rgba(61, 255, 154, .22);
+  }
+  h1 {
+    margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .28em;
+    color: var(--gruen); text-shadow: 0 0 18px rgba(61, 255, 154, .75);
+  }
+  .werkzeuge { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  button, .abt {
+    background: rgba(61, 255, 154, .08); color: var(--gruen);
+    border: 1px solid rgba(61, 255, 154, .45); border-radius: 999px;
+    padding: 7px 14px; font: inherit; cursor: pointer;
+    box-shadow: 0 0 16px rgba(61, 255, 154, .18);
+  }
+  #suche {
+    width: 150px; background: rgba(5, 16, 12, .85); color: #e9fff4;
+    border: 1px solid rgba(61, 255, 154, .4); border-radius: 999px;
+    padding: 7px 12px; font: inherit;
+  }
+  .abt.aktiv { background: rgba(61, 255, 154, .22); color: #e9fff4; }
+  #uhr, #status, #markt, .symbol, .extra, .leer, .achsen { color: #8fb9a4; }
+  #pille {
+    border: 1px solid rgba(122, 246, 255, .45); color: var(--cyan);
+    border-radius: 999px; padding: 4px 10px; font-size: 12px; letter-spacing: .08em;
+    box-shadow: 0 0 14px rgba(122, 246, 255, .25);
+  }
+  main {
+    display: grid; grid-template-columns: 320px 1fr; gap: 16px;
+    height: calc(100% - 64px); padding: 16px 28px 22px;
+  }
+  aside {
+    padding: 20px; overflow: auto;
+    background: rgba(6, 22, 16, .86);
+    border: 1px solid rgba(61, 255, 154, .28); border-radius: 18px;
+    box-shadow: inset 0 0 40px rgba(61, 255, 154, .05), 0 0 28px rgba(61, 255, 154, .08);
+  }
+  .marke, h2 {
+    margin: 0 0 12px; color: var(--gruen); font-size: 11px; letter-spacing: .18em; font-weight: 700;
+  }
+  #brief { margin: 0; font-size: 17px; line-height: 1.45; white-space: pre-wrap; }
+  #status, #markt { font-size: 13px; line-height: 1.4; }
+  #status { margin: 22px 0 0; }
+  #markt { margin: 10px 0 0; }
+  #karten { overflow: auto; padding-right: 4px; }
+  .leiste { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .abt strong { color: #e9fff4; font-weight: 700; margin-left: 6px; }
+  section { margin-bottom: 18px; }
+  .raster { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .karte {
+    padding: 14px; cursor: pointer;
+    background: rgba(7, 24, 18, .9);
+    border: 1px solid rgba(61, 255, 154, .22); border-radius: 16px;
+    box-shadow: 0 0 22px rgba(61, 255, 154, .06);
+  }
+  .karte:hover { border-color: rgba(61, 255, 154, .6); box-shadow: 0 0 24px rgba(61, 255, 154, .18); }
+  .zeile, .meta { display: flex; align-items: baseline; gap: 10px; }
+  .name { font-size: 16px; font-weight: 700; }
+  .preis { margin-left: auto; font-family: ui-monospace, Menlo, monospace; font-size: 16px; color: var(--gruen); }
+  .meta { margin-top: 4px; font-size: 12px; }
+  .chip { margin-left: auto; border-radius: 999px; padding: 2px 8px; border: 1px solid transparent; }
+  .grund, .extra { margin: 10px 0 0; line-height: 1.4; font-size: 13px; }
+  .extra, .gross { display: none; }
+  .extra { white-space: pre-wrap; }
+  .karte.offen .extra, .karte.offen .gross { display: block; }
+  .graph { width: 100%; height: 72px; margin-top: 8px; display: block; }
+  .gross { height: 168px; }
+  .hoch { color: var(--gruen); text-shadow: 0 0 10px rgba(61, 255, 154, .45); }
+  .runter { color: #ff6b7d; }
+  .einstieg_pruefen { background: rgba(61, 255, 154, .16); color: var(--gruen); border-color: rgba(61, 255, 154, .5); }
+  .sparplan { background: rgba(122, 246, 255, .12); color: var(--cyan); border-color: rgba(122, 246, 255, .4); }
+  .beobachten { background: rgba(233, 255, 244, .06); color: #d7ffe9; }
+  .abwarten { background: rgba(255, 196, 87, .1); color: #ffd27a; }
+  .vorsicht, .fehler { background: rgba(255, 107, 125, .12); color: #ff8b98; }
+  .unklar, .unvollstaendig { color: #8fb9a4; }
+  .leer { margin: 8px 4px; }
+  .potenzial { display: none; margin-top: 12px; padding: 12px; border-radius: 12px; border: 1px solid rgba(61, 255, 154, .4); background: rgba(61, 255, 154, .07); box-shadow: 0 0 18px rgba(61, 255, 154, .12); }
+  .karte.offen .potenzial { display: block; }
+  .score { margin: 0; font-family: ui-monospace, Menlo, monospace; color: var(--gruen); }
+  .meter { height: 8px; margin: 8px 0; border-radius: 999px; background: rgba(233, 255, 244, .08); overflow: hidden; }
+  .fuell { display: block; height: 100%; background: #3dff9a; box-shadow: 0 0 12px #3dff9a; }
+  .fuell.mittel { background: #ffd27a; box-shadow: 0 0 12px #ffd27a; }
+  .fuell.niedrig { background: #ff6b7d; box-shadow: 0 0 12px #ff6b7d; }
+  @media (max-width: 980px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    .raster { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>MARKTRADAR</h1>
+  <div class="werkzeuge">
+    <input id="suche" type="search" placeholder="Suchen" aria-label="Suchen">
+    <button id="neu" type="button">Noch einmal schauen</button>
+    <span id="uhr"></span>
+    <span id="pille">…</span>
+  </div>
+</header>
+<main>
+  <aside>
+    <p class="marke">EINSCHÄTZUNG</p>
+    <p id="brief">Ich hole die Kurse.</p>
+    <p id="status">Die Liste steht in der watchlist.txt.</p>
+    <p id="markt"></p>
+  </aside>
+  <section id="karten"></section>
+</main>
+<script>
+const SVG = "http://www.w3.org/2000/svg";
+const BEREICHE = ["Krypto", "USA", "Deutschland", "Europa", "ETFs"];
+let bereichFilter = "Alle";
+let suche = "";
+let standJetzt = null;
+const brief = document.getElementById("brief");
+const statusText = document.getElementById("status");
+const markt = document.getElementById("markt");
+const uhr = document.getElementById("uhr");
+const pille = document.getElementById("pille");
+const knopf = document.getElementById("neu");
+const karten = document.getElementById("karten");
+let zuletzt = "";
+
+function text(knoten, wert) { knoten.textContent = wert || ""; }
+
+function graph(werte, breite, hoehe) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("viewBox", "0 0 " + breite + " " + hoehe);
+  svg.setAttribute("class", hoehe > 100 ? "graph gross" : "graph");
+  if (!werte || werte.length < 2) {
+    const hinweis = document.createElementNS(SVG, "text");
+    hinweis.setAttribute("x", "8");
+    hinweis.setAttribute("y", String(hoehe / 2));
+    hinweis.setAttribute("fill", "#8fb9a4");
+    hinweis.setAttribute("font-size", "12");
+    hinweis.textContent = "Kein Kursverlauf";
+    svg.append(hinweis);
+    return svg;
+  }
+  const tief = Math.min.apply(null, werte);
+  const hoch = Math.max.apply(null, werte);
+  const spanne = hoch - tief || 1;
+  const oben = werte[werte.length - 1] >= werte[0];
+  const farbe = oben ? "#3dff9a" : "#ff6b7d";
+  const punkte = werte.map(function (wert, index) {
+    const x = (index / (werte.length - 1)) * breite;
+    const y = (hoehe - 10) - ((wert - tief) / spanne) * (hoehe - 20);
+    return x.toFixed(1) + "," + y.toFixed(1);
+  });
+  const flaeche = document.createElementNS(SVG, "polygon");
+  flaeche.setAttribute("points", "0," + hoehe + " " + punkte.join(" ") + " " + breite + "," + hoehe);
+  flaeche.setAttribute("fill", oben ? "rgba(61,255,154,.16)" : "rgba(255,107,125,.12)");
+  const linie = document.createElementNS(SVG, "polyline");
+  linie.setAttribute("points", punkte.join(" "));
+  linie.setAttribute("fill", "none");
+  linie.setAttribute("stroke", farbe);
+  linie.setAttribute("stroke-width", "2.4");
+  linie.setAttribute("stroke-linejoin", "round");
+  linie.setAttribute("stroke-linecap", "round");
+  svg.append(flaeche, linie);
+  return svg;
+}
+
+function karte(eintrag) {
+  const block = document.createElement("article");
+  block.className = "karte";
+  const kopf = document.createElement("div");
+  kopf.className = "zeile";
+  const name = document.createElement("div");
+  name.className = "name";
+  text(name, eintrag.name);
+  const preis = document.createElement("div");
+  preis.className = "preis";
+  text(preis, eintrag.preis);
+  kopf.append(name, preis);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const symbol = document.createElement("span");
+  symbol.className = "symbol";
+  text(symbol, eintrag.symbol);
+  const tag = document.createElement("span");
+  tag.className = "tag " + (eintrag.richtung || "");
+  text(tag, eintrag.tag);
+  const chip = document.createElement("span");
+  chip.className = "chip " + (eintrag.aktion || "");
+  text(chip, eintrag.titel);
+  meta.append(symbol, tag, chip);
+  const grund = document.createElement("p");
+  grund.className = "grund";
+  text(grund, eintrag.grund);
+  const klein = graph(eintrag.reihe, 320, 78);
+  const gross = graph(eintrag.reihe, 640, 168);
+  const extra = document.createElement("p");
+  extra.className = "extra";
+  text(extra, eintrag.extra);
+  block.append(kopf, meta, klein, grund, gross, potenzialBlock(eintrag), extra);
+  block.addEventListener("click", function () { block.classList.toggle("offen"); });
+  return block;
+}
+
+function potenzialBlock(eintrag) {
+  const block = document.createElement("div");
+  block.className = "potenzial";
+  const marke = document.createElement("p");
+  marke.className = "marke";
+  text(marke, "POTENZIAL");
+  const satz = document.createElement("p");
+  satz.className = "grund";
+  text(satz, eintrag.text);
+  block.append(marke);
+  if (eintrag.score !== null && eintrag.score !== undefined) {
+    const zahl = document.createElement("p");
+    zahl.className = "score";
+    text(zahl, eintrag.score + " / 100");
+    const meter = document.createElement("div");
+    meter.className = "meter";
+    const fuell = document.createElement("span");
+    fuell.className = "fuell " + (eintrag.stufe || "");
+    fuell.style.width = Math.max(0, Math.min(100, Number(eintrag.score))) + "%";
+    meter.append(fuell);
+    block.append(zahl, meter);
+  }
+  block.append(satz);
+  return block;
+}
+
+function abteilung(aktion, titel, liste, offen) {
+  const abschnitt = document.createElement("section");
+  abschnitt.id = "abt-" + aktion;
+  const kopf = document.createElement("h2");
+  text(kopf, titel);
+  const raster = document.createElement("div");
+  raster.className = "raster";
+  liste.forEach(function (eintrag) {
+    const block = karte(eintrag);
+    block.dataset.symbol = eintrag.symbol;
+    if (offen.has(eintrag.symbol)) block.classList.add("offen");
+    raster.append(block);
+  });
+  abschnitt.append(kopf, raster);
+  return abschnitt;
+}
+
+function passt(eintrag) {
+  if (bereichFilter !== "Alle" && eintrag.bereich !== bereichFilter) return false;
+  if (!suche) return true;
+  const haystack = ((eintrag.name || "") + " " + (eintrag.symbol || "")).toLowerCase();
+  return haystack.indexOf(suche) !== -1;
+}
+
+function zeichnen(stand) {
+  standJetzt = stand;
+  text(brief, stand.briefing);
+  text(statusText, stand.status);
+  text(markt, stand.markt);
+  text(uhr, stand.uhr);
+  text(pille, stand.pille || "…");
+  knopf.textContent = stand.arbeitet ? "Schaut …" : "Noch einmal schauen";
+  knopf.disabled = !!stand.arbeitet;
+  const offen = new Set(Array.from(karten.querySelectorAll(".karte.offen")).map(function (karte) {
+    return karte.dataset.symbol;
+  }));
+  const stelle = karten.scrollTop;
+  karten.replaceChildren();
+  const alle = stand.karten || [];
+  const leiste = filterleiste(alle);
+  const kartenliste = alle.filter(passt);
+  if (!kartenliste.length) {
+    const leer = document.createElement("p");
+    leer.className = "leer";
+    const wartet = stand.arbeitet && !alle.length;
+    text(leer, wartet ? "Die Kurse kommen." : "Keine Werte für diese Ansicht.");
+    karten.append(leiste, leer);
+    return;
+  }
+  BEREICHE.forEach(function (name) {
+    const liste = kartenliste.filter(function (eintrag) { return eintrag.bereich === name; });
+    if (!liste.length) return;
+    karten.append(abteilung(name, name.toUpperCase(), liste, offen));
+  });
+  karten.prepend(leiste);
+  karten.scrollTop = stelle;
+}
+
+function filterleiste(alle) {
+  const leiste = document.createElement("div");
+  leiste.className = "leiste";
+  ["Alle"].concat(BEREICHE).forEach(function (name) {
+    const liste = name === "Alle" ? alle : alle.filter(function (eintrag) { return eintrag.bereich === name; });
+    if (name !== "Alle" && !liste.length) return;
+    const knopfAbt = document.createElement("button");
+    knopfAbt.type = "button";
+    knopfAbt.className = "abt" + (bereichFilter === name ? " aktiv" : "");
+    text(knopfAbt, name);
+    const zahl = document.createElement("strong");
+    text(zahl, String(liste.length));
+    knopfAbt.append(zahl);
+    knopfAbt.addEventListener("click", function () {
+      bereichFilter = name;
+      if (standJetzt) zeichnen(standJetzt);
+    });
+    leiste.append(knopfAbt);
+  });
+  return leiste;
+}
+
+async function laden() {
+  try {
+    const antwort = await fetch("/stand");
+    if (!antwort.ok) return;
+    const roh = await antwort.text();
+    if (roh === zuletzt) return;
+    zuletzt = roh;
+    zeichnen(JSON.parse(roh));
+  } catch (fehler) {}
+}
+
+knopf.addEventListener("click", async function () {
+  knopf.disabled = true;
+  knopf.textContent = "Schaut …";
+  zuletzt = "";
+  try { await fetch("/neu"); } catch (fehler) {}
+});
+
+const sucheFeld = document.getElementById("suche");
+sucheFeld.addEventListener("input", function () {
+  suche = sucheFeld.value.trim().toLowerCase();
+  zuletzt = "";
+  if (standJetzt) zeichnen(standJetzt);
+});
+
+laden();
+setInterval(laden, 1000);
+</script>
+</body>
+</html>

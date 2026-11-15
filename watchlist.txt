@@ -1,0 +1,37 @@
+# Ein Yahoo-Kürzel pro Zeile. Zeilen mit # ignoriert das Programm.
+# Krypto
+BTC-USD
+ETH-USD
+SOL-USD
+# USA
+NVDA
+AAPL
+MSFT
+AMZN
+GOOGL
+META
+TSLA
+AMD
+AVGO
+NFLX
+# Deutschland
+SAP.DE
+SIE.DE
+ALV.DE
+BMW.DE
+IFX.DE
+RHM.DE
+MBG.DE
+DTE.DE
+AIR.DE
+ADS.DE
+VOW3.DE
+DBK.DE
+BAYN.DE
+BAS.DE
+# ETFs
+VWCE.DE
+SXR8.DE
+EUNL.DE
+EXS1.DE
+QDVE.DE
