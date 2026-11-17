@@ -77,7 +77,7 @@ def stooq_aus_csv(symbol: str, text: str) -> Kursdaten | None:
         hat_bereinigt=False,
         quelle="Stooq",
         kurszeit=balken[-1].zeit,
-        datenstatus="unvollstaendig" if _datenstatus(balken[-1].zeit) == "ok" else "veraltet",
+        datenstatus="veraltet" if _datenstatus(balken[-1].zeit) == "veraltet" else "unvollstaendig",
         kursart="schluss",
         handelsplatz="Stooq",
         hinweis=hinweis,

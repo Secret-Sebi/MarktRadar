@@ -19,8 +19,9 @@ def nach_euro(daten: Kursdaten, wechselkurs) -> Kursdaten:
     if not isinstance(faktor, (int, float)) or isinstance(faktor, bool) or faktor <= 0:
         return daten
     hinweis = (
-        f"Mit dem aktuellen Wechselkurs {code} nach Euro umgerechnet. "
-        "Die Historie nutzt denselben Kurs. Das ist nicht der Trade-Republic-Preis."
+        f"Nur der heutige Wechselkurs {code} nach Euro. "
+        "Die Prozente bleiben die der Originalwährung. Die alten Stände sind keine historischen Eurokurse. "
+        "Das ist nicht der Trade-Republic-Preis."
     )
     return _skaliere(daten, float(faktor) / teiler, hinweis)
 

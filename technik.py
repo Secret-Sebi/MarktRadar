@@ -4,9 +4,11 @@ Der angezeigte Marktkurs bleibt davon getrennt. Fehlende Pflichtreihen
 ergeben keine neutrale Note, sondern eine unvollständige Bewertung.
 """
 
+from __future__ import annotations
+
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from analyse import rsi, sma
@@ -15,37 +17,55 @@ from analyse import rsi, sma
 @dataclass(frozen=True)
 class Technik:
     vollstaendig: bool
-    fehlend: Tuple[str, ...]
-    hinweise: Tuple[str, ...]
-    muster: Tuple[str, ...]
-    macd: Optional[float]
-    macd_signal: Optional[float]
-    atr: Optional[float]
-    trendstaerke: Optional[float]
-    volatilitaet: Optional[float]
-    rendite_1: Optional[float]
-    rendite_5: Optional[float]
-    rendite_20: Optional[float]
-    rendite_60: Optional[float]
-    stuetze: Optional[float]
-    widerstand: Optional[float]
-    relativ: Optional[float]
+    fehlend: tuple[str, ...]
+    hinweise: tuple[str, ...]
+    muster: tuple[str, ...]
+    macd: float | None
+    macd_signal: float | None
+    atr: float | None
+    trendstaerke: float | None
+    volatilitaet: float | None
+    rendite_1: float | None
+    rendite_5: float | None
+    rendite_20: float | None
+    rendite_60: float | None
+    stuetze: float | None
+    widerstand: float | None
+    relativ: float | None
     index_titel: str
-    hoch_52: Optional[float]
-    tief_52: Optional[float]
+    hoch_52: float | None
+    tief_52: float | None
+
+
+_INDEX_NACH_SUFFIX = (
+    (".DE", "^GDAXI"),
+    (".PA", "^FCHI"),
+    (".AS", "^AEX"),
+    (".L", "^FTSE"),
+    (".SW", "^SSMI"),
+    (".TO", "^GSPTSE"),
+    (".HK", "^HSI"),
+    (".T", "^N225"),
+)
 
 
 def vergleichsindex(symbol: str) -> str:
-    if symbol.upper().endswith(".DE"):
-        return "^GDAXI"
+    oben = symbol.upper()
+    if oben.endswith("-USD"):
+        return "" if oben.startswith("BTC-") else "BTC-USD"
+    for endung, index in _INDEX_NACH_SUFFIX:
+        if oben.endswith(endung):
+            return index
+    if "." in oben:
+        return ""
     return "^GSPC"
 
 
-def ema_reihe(werte: Sequence[float], periode: int) -> Optional[Tuple[Optional[float], ...]]:
+def ema_reihe(werte: Sequence[float], periode: int) -> tuple[float | None, ...] | None:
     if periode <= 0 or len(werte) < periode:
         return None
     glatt = sum(werte[:periode]) / periode
-    reihe: Tuple[Optional[float], ...] = (None,) * (periode - 1) + (glatt,)
+    reihe: tuple[float | None, ...] = (None,) * (periode - 1) + (glatt,)
     faktor = 2 / (periode + 1)
     for wert in werte[periode:]:
         glatt = (wert - glatt) * faktor + glatt
@@ -53,14 +73,14 @@ def ema_reihe(werte: Sequence[float], periode: int) -> Optional[Tuple[Optional[f
     return reihe
 
 
-def ema_letzter(werte: Sequence[float], periode: int) -> Optional[float]:
+def ema_letzter(werte: Sequence[float], periode: int) -> float | None:
     reihe = ema_reihe(werte, periode)
     if not reihe:
         return None
     return reihe[-1]
 
 
-def macd(werte: Sequence[float]) -> Optional[Tuple[float, float, float]]:
+def macd(werte: Sequence[float]) -> tuple[float, float, float] | None:
     kurz = ema_reihe(werte, 12)
     lang = ema_reihe(werte, 26)
     if kurz is None or lang is None:
@@ -73,12 +93,12 @@ def macd(werte: Sequence[float]) -> Optional[Tuple[float, float, float]]:
     return linie[-1], signal, linie[-1] - signal
 
 
-def atr(hochs: Sequence[float], tiefs: Sequence[float], schluesse: Sequence[float], periode: int = 14) -> Optional[float]:
+def atr(hochs: Sequence[float], tiefs: Sequence[float], schluesse: Sequence[float], periode: int = 14) -> float | None:
     spannen = _true_ranges(hochs, tiefs, schluesse)
     return _wilder_letzter(spannen, periode)
 
 
-def adx(hochs: Sequence[float], tiefs: Sequence[float], schluesse: Sequence[float], periode: int = 14) -> Optional[float]:
+def adx(hochs: Sequence[float], tiefs: Sequence[float], schluesse: Sequence[float], periode: int = 14) -> float | None:
     if len(schluesse) <= periode * 2:
         return None
     plus, minus, spannen = _richtungsbewegungen(hochs, tiefs, schluesse)
@@ -89,7 +109,7 @@ def adx(hochs: Sequence[float], tiefs: Sequence[float], schluesse: Sequence[floa
     return _wilder_letzter(dx, periode)
 
 
-def volatilitaet(werte: Sequence[float], tage: int = 20) -> Optional[float]:
+def volatilitaet(werte: Sequence[float], tage: int = 20) -> float | None:
     if len(werte) <= tage:
         return None
     fenster = werte[-(tage + 1) :]
@@ -106,7 +126,7 @@ def zonen(
     tiefs: Sequence[float],
     preis: float,
     abstand: int = 5,
-) -> Tuple[Optional[float], Optional[float]]:
+) -> tuple[float | None, float | None]:
     stuetzen = []
     widerstaende = []
     for index in range(abstand, len(hochs) - abstand):
@@ -121,7 +141,7 @@ def zonen(
     return stuetze, widerstand
 
 
-def relativ(aktie: Sequence[float], index: Sequence[float], tage: int = 60) -> Optional[float]:
+def relativ(aktie: Sequence[float], index: Sequence[float], tage: int = 60) -> float | None:
     if len(aktie) <= tage or len(index) <= tage or aktie[-(tage + 1)] == 0 or index[-(tage + 1)] == 0:
         return None
     aktie_rendite = (aktie[-1] / aktie[-(tage + 1)] - 1) * 100
@@ -147,18 +167,18 @@ def trend_kreuzt(preise: Sequence[float], fenster: int = 5) -> bool:
 
 def muster(
     preis: float,
-    sma50: Optional[float],
-    sma200: Optional[float],
-    rsi: Optional[float],
-    rendite_1: Optional[float],
-    rendite_5: Optional[float],
-    rendite_20: Optional[float],
-    index_20: Optional[float],
-    volumen: Optional[float],
-    volumen_schnitt: Optional[float],
+    sma50: float | None,
+    sma200: float | None,
+    rsi: float | None,
+    rendite_1: float | None,
+    rendite_5: float | None,
+    rendite_20: float | None,
+    index_20: float | None,
+    volumen: float | None,
+    volumen_schnitt: float | None,
     bricht_widerstand_aus: bool,
     kreuzt_trend: bool,
-) -> Tuple[str, ...]:
+) -> tuple[str, ...]:
     namen = []
     if _ist_ruecksetzer(preis, sma50, sma200, rsi):
         namen.append("Rücksetzer im Aufwärtstrend")
@@ -229,7 +249,7 @@ def berechne(balken, preis: float, index_balken, hat_bereinigt: bool, index_tite
     )
 
 
-def _true_ranges(hochs, tiefs, schluesse) -> Tuple[float, ...]:
+def _true_ranges(hochs, tiefs, schluesse) -> tuple[float, ...]:
     werte = []
     for index in range(1, len(schluesse)):
         werte.append(
@@ -242,7 +262,7 @@ def _true_ranges(hochs, tiefs, schluesse) -> Tuple[float, ...]:
     return tuple(werte)
 
 
-def _wilder_reihe(werte: Sequence[float], periode: int) -> Tuple[float, ...]:
+def _wilder_reihe(werte: Sequence[float], periode: int) -> tuple[float, ...]:
     if periode <= 0 or len(werte) < periode:
         return ()
     mittel = sum(werte[:periode])
@@ -253,7 +273,7 @@ def _wilder_reihe(werte: Sequence[float], periode: int) -> Tuple[float, ...]:
     return reihe
 
 
-def _wilder_letzter(werte: Sequence[float], periode: int) -> Optional[float]:
+def _wilder_letzter(werte: Sequence[float], periode: int) -> float | None:
     reihe = _wilder_reihe(werte, periode)
     if not reihe:
         return None
@@ -279,7 +299,7 @@ def _richtungsbewegungen(hochs, tiefs, schluesse):
     return tuple(plus), tuple(minus), tuple(spannen)
 
 
-def _dx_werte(atr_reihe, plus_reihe, minus_reihe) -> Tuple[float, ...]:
+def _dx_werte(atr_reihe, plus_reihe, minus_reihe) -> tuple[float, ...]:
     werte = []
     for spanne, plus, minus in zip(atr_reihe, plus_reihe, minus_reihe):
         if spanne == 0:
@@ -291,7 +311,7 @@ def _dx_werte(atr_reihe, plus_reihe, minus_reihe) -> Tuple[float, ...]:
     return tuple(werte)
 
 
-def _spread(preise: Sequence[float]) -> Optional[float]:
+def _spread(preise: Sequence[float]) -> float | None:
     kurz = sma(preise, 50)
     lang = sma(preise, 200)
     if kurz is None or lang is None:
@@ -313,13 +333,13 @@ def _volumen_hebt_ab(volumen, schnitt) -> bool:
     return volumen is not None and schnitt not in (None, 0) and volumen > 1.5 * schnitt
 
 
-def _rendite(werte: Sequence[float], tage: int) -> Optional[float]:
+def _rendite(werte: Sequence[float], tage: int) -> float | None:
     if len(werte) <= tage or werte[-(tage + 1)] == 0:
         return None
     return (werte[-1] / werte[-(tage + 1)] - 1) * 100
 
 
-def _fehlende_pflicht(schluesse: Sequence[float]) -> Tuple[str, ...]:
+def _fehlende_pflicht(schluesse: Sequence[float]) -> tuple[str, ...]:
     fehlend = []
     if len(schluesse) < 200:
         fehlend.append("200 Handelstage")
@@ -328,7 +348,7 @@ def _fehlende_pflicht(schluesse: Sequence[float]) -> Tuple[str, ...]:
     return tuple(fehlend)
 
 
-def _fehlende_hinweise(hat_bereinigt: bool, index_balken) -> Tuple[str, ...]:
+def _fehlende_hinweise(hat_bereinigt: bool, index_balken) -> tuple[str, ...]:
     hinweise = []
     if not hat_bereinigt:
         hinweise.append("Bereinigter Kurs fehlt")

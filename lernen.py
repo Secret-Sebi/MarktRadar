@@ -347,7 +347,7 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS nachrichten (
             id INTEGER PRIMARY KEY,
-            url TEXT NOT NULL UNIQUE,
+            url TEXT NOT NULL,
             symbol TEXT NOT NULL,
             zeit INTEGER NOT NULL,
             titel TEXT NOT NULL,
@@ -357,13 +357,15 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
             wirkung_3 REAL,
             wirkung_5 REAL,
             wirkung_20 REAL,
-            rel_5 REAL
+            rel_5 REAL,
+            UNIQUE (url, symbol)
         )
         """
     )
     spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")}
     if "rel_5" not in spalten:
         verbindung.execute("ALTER TABLE nachrichten ADD COLUMN rel_5 REAL")
+    _url_fuer_mehrere_namen(verbindung)
     verbindung.execute(
         """
         CREATE TABLE IF NOT EXISTS abruf (
@@ -374,6 +376,33 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _url_fuer_mehrere_namen(verbindung: sqlite3.Connection) -> None:
+    gefunden = verbindung.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nachrichten'").fetchone()
+    text = "" if gefunden is None or gefunden[0] is None else str(gefunden[0]).replace(" ", "")
+    if "UNIQUE(url,symbol)" in text:
+        return
+    if "urlTEXTNOTNULLUNIQUE" not in text and "urlTEXTUNIQUE" not in text:
+        return
+    alt = [str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")]
+    definitionen = []
+    for _cid, name, typ, pflicht, standard, schluessel in verbindung.execute("PRAGMA table_info(nachrichten)"):
+        if schluessel:
+            definitionen.append(f"{name} INTEGER PRIMARY KEY")
+            continue
+        stueck = f"{name} {typ or 'TEXT'}"
+        if pflicht:
+            stueck += " NOT NULL"
+        if standard is not None:
+            stueck += f" DEFAULT {standard}"
+        definitionen.append(stueck)
+    definitionen.append("UNIQUE (url, symbol)")
+    verbindung.execute("ALTER TABLE nachrichten RENAME TO nachrichten_alt")
+    verbindung.execute(f"CREATE TABLE nachrichten ({', '.join(definitionen)})")
+    spalten = ", ".join(alt)
+    verbindung.execute(f"INSERT INTO nachrichten ({spalten}) SELECT {spalten} FROM nachrichten_alt")
+    verbindung.execute("DROP TABLE nachrichten_alt")
 
 
 def _lernstand(abgeschlossen: int, offen: int, namen: int, schwelle: int, testbar: int, modell: int) -> dict:

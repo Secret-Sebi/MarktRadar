@@ -142,11 +142,14 @@ def yahoo_kurs(symbol: str, oeffnen=urlopen) -> Kursdaten:
     return daten
 
 
-def _datenstatus(kurszeit: int | None, jetzt: int | None = None) -> str:
-    if kurszeit is None:
-        return "ok"
+def _datenstatus(kurszeit: int | None, jetzt: int | None = None, krypto: bool = False) -> str:
+    if isinstance(kurszeit, bool) or not isinstance(kurszeit, int):
+        return "unvollstaendig"
     alter = (int(time.time()) if jetzt is None else jetzt) - kurszeit
-    if alter > 10 * 24 * 3600:
+    if alter < -15 * 60:
+        return "unvollstaendig"
+    grenze = 2 * 24 * 3600 if krypto else 10 * 24 * 3600
+    if alter > grenze:
         return "veraltet"
     return "ok"
 
@@ -178,8 +181,9 @@ def kurse_aus_antwort(payload: dict) -> Kursdaten | None:
     preis = _optional_float(meta.get("regularMarketPrice")) or balken[-1].schluss
     name = meta.get("longName") or meta.get("shortName") or meta.get("symbol") or ""
     kurszeit = _zeitstempel(meta.get("regularMarketTime")) or balken[-1].zeit
+    symbol = str(meta.get("symbol") or "")
     return Kursdaten(
-        symbol=str(meta.get("symbol") or ""),
+        symbol=symbol,
         name=_name(str(name)),
         waehrung=str(meta.get("currency") or ""),
         preis=preis,
@@ -192,7 +196,7 @@ def kurse_aus_antwort(payload: dict) -> Kursdaten | None:
         hat_bereinigt=bool(bereinigt),
         quelle="Yahoo Finance",
         kurszeit=kurszeit,
-        datenstatus=_datenstatus(kurszeit),
+        datenstatus=_datenstatus(kurszeit, krypto=symbol.upper().endswith("-USD")),
         kursart="verzoegert",
         handelsplatz=str(meta.get("exchangeName") or meta.get("fullExchangeName") or ""),
         hinweis="Verzögerter Yahoo-Finance-Kurs, kein Echtzeit-Feed und nicht der Brokerpreis.",

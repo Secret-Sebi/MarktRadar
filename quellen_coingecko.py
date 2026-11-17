@@ -58,7 +58,7 @@ def kurs_aus_gecko(symbol: str, name: str, preis: dict, chart: dict) -> Kursdate
         hat_bereinigt=False,
         quelle="CoinGecko",
         kurszeit=kurszeit,
-        datenstatus="unvollstaendig" if _datenstatus(kurszeit) == "ok" else "veraltet",
+        datenstatus="veraltet" if _datenstatus(kurszeit, krypto=True) == "veraltet" else "unvollstaendig",
         kursart="aggregiert",
         handelsplatz="CoinGecko",
         hinweis="Aggregierter CoinGecko-Preis in Euro, kein Börsen-Echtzeitkurs und nicht der Trade-Republic-Preis. Deshalb kein Einstiegssignal.",

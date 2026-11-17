@@ -4,3 +4,4 @@ __pycache__/
 .env
 graphify-out/
 daten/*.sqlite
+zustand.json

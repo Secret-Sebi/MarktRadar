@@ -10,7 +10,7 @@ from analyse import aktion_bei_datenstatus
 from beobachter import haenge_an, lade_liste
 from euro import nach_euro
 from fundamental import aus_yahoo, text
-from kurse import Bar, Kursdaten, abweichung_prozent
+from kurse import Bar, Kursdaten, _datenstatus, abweichung_prozent
 from quellen import mit_fallback, plausibel
 from quellen_coingecko import kurs_aus_gecko
 from quellen_stooq import stooq_aus_csv, stooq_kuerzel
@@ -75,6 +75,15 @@ class GeckoTests(unittest.TestCase):
 
 
 class QualitaetTests(unittest.TestCase):
+    def test_fehlender_zeitpunkt_ist_nicht_aktuell(self):
+        jetzt = 1_700_000_000
+        self.assertEqual(_datenstatus(None, jetzt), "unvollstaendig")
+        self.assertEqual(_datenstatus(True, jetzt), "unvollstaendig")
+        self.assertEqual(_datenstatus(jetzt + 3600, jetzt), "unvollstaendig")
+        self.assertEqual(_datenstatus(jetzt - 3 * 24 * 3600, jetzt), "ok")
+        self.assertEqual(_datenstatus(jetzt - 3 * 24 * 3600, jetzt, krypto=True), "veraltet")
+        self.assertEqual(_datenstatus(jetzt - 11 * 24 * 3600, jetzt), "veraltet")
+
     def test_abweichung_braucht_zwei_echte_preise(self):
         self.assertAlmostEqual(abweichung_prozent(100, 101), 1.0)
         self.assertIsNone(abweichung_prozent(0, 10))
@@ -97,6 +106,9 @@ class QualitaetTests(unittest.TestCase):
         self.assertEqual(werte, {"KGV": 28.5})
         self.assertIn("Branche laut Yahoo: Technology", text(branche, werte))
         self.assertNotIn("Gewinnmarge", text(branche, werte))
+        self.assertIn("Keine fundamentale Gesamtnote", text(branche, werte))
+        self.assertIn("kein günstiger Einstieg", text("Technology", {"KGV": 12.0, "Gewinnmarge": -3.0, "Free Cashflow": 10.0, "Umsatzwachstum": 5.0, "Eigenkapitalrendite": 8.0}))
+        self.assertIn("keine positive Bewertung", text("Financial Services", {"KGV": 8.0}))
         self.assertEqual(text("", {}), "fehlt")
 
 
@@ -123,7 +135,8 @@ class EuroTests(unittest.TestCase):
         self.assertAlmostEqual(euro.balken[0].schluss, 90.0)
         self.assertEqual(euro.balken[0].volumen, 5.0)
         self.assertAlmostEqual(euro.tag_pct, 1.5)
-        self.assertIn("Euro", euro.hinweis)
+        self.assertIn("keine historischen Eurokurse", euro.hinweis)
+        self.assertAlmostEqual(euro.schluesse[-1] / euro.schluesse[0], 100.0 / 80.0)
 
     def test_ohne_wechselkurs_bleibt_dollar(self):
         daten = Kursdaten("AAPL", "Apple", "USD", 100.0, None, False, (100.0,), 100.0)

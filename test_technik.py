@@ -13,6 +13,7 @@ from technik import (
     muster,
     relativ,
     trend_kreuzt,
+    vergleichsindex,
     volatilitaet,
     vorzeichenwechsel,
     zonen,
@@ -20,6 +21,15 @@ from technik import (
 
 
 class IndikatorTests(unittest.TestCase):
+    def test_vergleichsindex_folgt_dem_markt(self):
+        self.assertEqual(vergleichsindex("SAP.DE"), "^GDAXI")
+        self.assertEqual(vergleichsindex("MC.PA"), "^FCHI")
+        self.assertEqual(vergleichsindex("ETH-USD"), "BTC-USD")
+        self.assertEqual(vergleichsindex("BTC-USD"), "")
+        self.assertEqual(vergleichsindex("AAPL"), "^GSPC")
+        self.assertEqual(vergleichsindex("NESN.SW"), "^SSMI")
+        self.assertEqual(vergleichsindex("UNBEKANNT.ZZ"), "")
+
     def test_ema_letzter_folgt_der_formel(self):
         self.assertEqual(ema_letzter((1, 2, 3, 4, 5, 6), 3), 5.0)
         self.assertEqual(ema_letzter((4, 4, 4, 4), 3), 4.0)

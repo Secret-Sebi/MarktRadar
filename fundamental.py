@@ -50,8 +50,19 @@ def text(branche: str, werte: dict[str, float]) -> str:
             teile.append(f"{name} {zahl:.0f}")
         else:
             teile.append(f"{name} {zahl:.1f} %")
+    teile.append(_bewertung(branche, werte))
     teile.append("Wettbewerber fehlen, solange Yahoo sie nicht liefert.")
     return ". ".join(teile)
+
+
+def _bewertung(branche: str, werte: dict[str, float]) -> str:
+    if any(wort in branche.lower() for wort in ("bank", "insurance", "real estate", "financial")):
+        return "Sonderbranche. Dafür fehlen passende Kennzahlen, deshalb gibt es keine positive Bewertung."
+    if len(werte) < 5:
+        return "Keine fundamentale Gesamtnote. Zu wenige Kennzahlen, und Fehlendes zählt nicht als neutral."
+    if werte.get("KGV", 1) < 0 or werte.get("Gewinnmarge", 0) < 0 or werte.get("Free Cashflow", 0) < 0:
+        return "Verlust, negative Marge oder negativer Free Cashflow. Das ist kein günstiger Einstieg."
+    return "Die vorhandenen Zahlen ergeben keine Kaufnote und keinen Branchenvergleich."
 
 
 _CACHE: dict[str, tuple[float, str]] = {}

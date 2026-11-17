@@ -111,6 +111,30 @@ class WirkungTests(unittest.TestCase):
             self.assertIn("keine zugeordnete", ausserhalb["hinweis"])
             self.assertEqual(fortschritt(pfad)["abgeschlossen"], 2)
 
+    def test_dieselbe_url_gilt_fuer_zwei_namen(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    """
+                    CREATE TABLE nachrichten (
+                        id INTEGER PRIMARY KEY,
+                        url TEXT NOT NULL UNIQUE,
+                        symbol TEXT NOT NULL,
+                        zeit INTEGER NOT NULL,
+                        titel TEXT NOT NULL,
+                        quelle TEXT NOT NULL,
+                        kategorie TEXT NOT NULL
+                    )
+                    """
+                )
+            meldung = Meldung("Zinsen steigen", "Yahoo", 1_000, "https://gleich", "zinsen")
+            self.assertEqual(speichern(pfad, "SAP.DE", (meldung,)), 1)
+            self.assertEqual(speichern(pfad, "ALV.DE", (meldung,)), 1)
+            with sqlite3.connect(pfad) as verbindung:
+                namen = {zeile[0] for zeile in verbindung.execute("SELECT symbol FROM nachrichten")}
+            self.assertEqual(namen, {"SAP.DE", "ALV.DE"})
+
 
 def statistik_leer():
     from lernen import Befund

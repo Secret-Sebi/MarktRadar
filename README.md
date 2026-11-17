@@ -45,7 +45,9 @@ Sobald fünf spätere Handelstage als echte Kurse vorliegen, speichert es die Be
 
 Unter acht Fällen oder ohne spätere Kurse bleibt der technische Hinweis stehen, mit dem Vermerk „kleine Stichprobe“ oder dass die Wirkung noch fehlt. Das ist ein Zusammenhang, keine Ursache.
 
-Zusätzlich zieht ein logistisches Modell seine Gewichte nach. Es sieht nur Kurse vor der Meldung, den RSI, ob der Kurs über der 20-Tage-Linie liegt, und sechs Schlagwort-Themen. Eine Prozentzahl erscheint erst, wenn mindestens 12 spätere Fälle geprüft wurden, die nicht zum Lernen dieser Prüfung gehört haben. Angezeigt wird dann die gemessene Trefferquote, keine Chance für den nächsten Kurs. Unter 35 % Trefferquote wird aus einem Einstieg ein Abwarten. Ab 65 % kann aus „Kein klarer Vorteil“ ein „Prüfen“ werden, aber nur bei vollständigen Kursdaten.
+Zusätzlich zieht ein logistisches Modell seine Gewichte nach. Es sieht nur Kurse vor der Meldung, den RSI, ob der Kurs über der 20-Tage-Linie liegt, und sechs Schlagwort-Themen. Die aktuelle Modellzahl erzeugt kein „Prüfen“. Eine Trefferquote aus wenigen späteren Fällen auch nicht. Erst ab 60 späteren Testfällen kann eine niedrige Modellzahl ein „Prüfen“ in „Abwarten“ drehen. Eine kalibrierte Chance für den nächsten Kurs gibt es nicht.
+
+Ein Kurs ohne Zeitpunkt gilt als unvollständig. Krypto, die älter als zwei Tage ist, gilt als veraltet, Aktien und ETFs nach zehn Tagen. Der Euro-Kurs nutzt nur den heutigen Wechselkurs. Die Prozente bleiben die der Originalwährung. Alte Stände sind keine historischen Eurokurse. Eine Meldung kann mehreren Namen gehören, wenn dieselbe URL gespeichert wird. Banken, Versicherungen und Immobilien bekommen keine positive Fundamentalnote. Weniger als fünf echte Kennzahlen ergeben keine Gesamtnote.
 
 Unternehmenszahlen kommen nur, wenn Yahoo sie in `quoteSummary` liefert: KGV, Wachstum, Marge, Verschuldung, Free Cashflow, Dividende, Eigenkapitalrendite und Branche. Fehlende Felder bleiben leer. Ein Vergleich mit Wettbewerbern fehlt.
 

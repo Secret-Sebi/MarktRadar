@@ -58,14 +58,15 @@ class ModellTests(unittest.TestCase):
         self.assertEqual(aktion_aus_ki("beobachten", positiv, chance, True), "beobachten")
         self.assertIn("späteren Fällen", ki_satz(positiv, chance))
 
-    def test_gemessene_trefferquote_darf_die_aktion_aendern(self):
+    def test_trefferquote_erzeugt_kein_pruefen(self):
         eingabe = (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 1.0)
         faelle = tuple((eingabe, 1) for _ in range(24))
         self.assertEqual(trefferquote(faelle), (12, 12))
-        self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), None, True, (12, 12)), "einstieg_pruefen")
-        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), None, True, (2, 12)), "abwarten")
-        self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), None, False, (12, 12)), "beobachten")
-        self.assertIn("12-mal richtig", ki_satz(leeres_modell(), None, (12, 12)))
+        self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), 0.9, True, (12, 12)), "beobachten")
+        self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), 0.9, True, (60, 60)), "beobachten")
+        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), 0.2, True, (40, 60)), "abwarten")
+        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), 0.2, False, (40, 60)), "einstieg_pruefen")
+        self.assertIn("kein Prüfen", ki_satz(leeres_modell(), 0.9, (12, 12)))
 
 
 if __name__ == "__main__":

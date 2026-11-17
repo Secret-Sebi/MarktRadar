@@ -16,6 +16,7 @@ from analyse import rsi, sma
 
 _THEMEN = ("zinsen", "geopolitik", "quartal", "rohstoff", "krypto", "uebernahme")
 _MINDEST = 12
+_EINFLUSS = 60
 _RATE = 0.2
 
 
@@ -141,26 +142,25 @@ def aktion_aus_ki(
     daten_ok: bool,
     pruefung: tuple[int, int] | None = None,
 ) -> str:
-    if pruefung is None or pruefung[1] < _MINDEST:
+    if not daten_ok or chance is None or pruefung is None or pruefung[1] < _EINFLUSS:
         return aktion
-    quote = pruefung[0] / pruefung[1]
-    if quote <= 0.35 and aktion in ("einstieg_pruefen", "sparplan"):
+    if chance <= 0.35 and aktion in ("einstieg_pruefen", "sparplan"):
         return "abwarten"
-    if daten_ok and quote >= 0.65 and aktion == "beobachten":
-        return "einstieg_pruefen"
     return aktion
 
 
 def ki_satz(modell: Modell, chance: float | None, pruefung: tuple[int, int] | None = None) -> str:
-    if pruefung is None or pruefung[1] < _MINDEST:
+    if pruefung is None or pruefung[1] < _EINFLUSS:
         return (
             f"Das Modell hat {modell.beispiele} Fälle gesehen. "
-            "Eine Prozentzahl gibt es erst nach einem Test an späteren Fällen, die nicht zum Lernen verwendet wurden."
+            "Die aktuelle Modellzahl ändert die Bewertung nicht. "
+            "Eine Trefferquote aus wenigen späteren Fällen erzeugt kein Prüfen."
         )
-    treffer, anzahl = pruefung
+    if chance is None:
+        return "Der Test ist groß genug, aber für diesen Zeitpunkt fehlt die Modellzahl. Die Bewertung bleibt unverändert."
     return (
-        f"Im Test an {anzahl} späteren Fällen lag das Modell {treffer}-mal richtig. "
-        "Das ist die gemessene Trefferquote, keine Chance für den nächsten Kurs."
+        f"Im Test an {pruefung[1]} späteren Fällen lag das Modell {pruefung[0]}-mal richtig. "
+        "Diese Quote erzeugt kein Prüfen. Nur eine niedrige aktuelle Modellzahl kann ein Prüfen in Abwarten drehen."
     )
 
 

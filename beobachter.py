@@ -54,7 +54,18 @@ LISTE = ORDNER / "watchlist.txt"
 ZUSTAND = ORDNER / "zustand.json"
 DATENBANK = ORDNER / "daten" / "markt.sqlite"
 PAUSE_SEKUNDEN = 0.35
-_INDEX_NAME = {"^GDAXI": "DAX", "^GSPC": "S&P 500"}
+_INDEX_NAME = {
+    "^GDAXI": "DAX",
+    "^GSPC": "S&P 500",
+    "^FCHI": "CAC 40",
+    "^AEX": "AEX",
+    "^FTSE": "FTSE 100",
+    "^SSMI": "SMI",
+    "^GSPTSE": "TSX",
+    "^HSI": "Hang Seng",
+    "^N225": "Nikkei",
+    "BTC-USD": "Bitcoin",
+}
 
 _STANDARD_LISTE = """\
 # Ein Yahoo-Kürzel pro Zeile. Zeilen mit # ignoriert das Programm.
@@ -328,7 +339,7 @@ def _kurs_oder_fehler(symbol: str, fx: dict):
 
 
 def _maerkte(symbole: Sequence[str], fx: dict | None = None) -> dict:
-    indizes = tuple(dict.fromkeys(vergleichsindex(symbol) for symbol in symbole))
+    indizes = tuple(dict.fromkeys(index for index in (vergleichsindex(symbol) for symbol in symbole) if index))
     maerkte = {}
     for index, symbol in enumerate(indizes):
         if index:
@@ -354,7 +365,7 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         daten.preis,
         None if markt is None else markt.balken,
         daten.hat_bereinigt,
-        _INDEX_NAME.get(vergleichsindex(symbol), "Index"),
+        _INDEX_NAME.get(vergleichsindex(symbol), "kein passender Index"),
         daten.hoch_52w,
         daten.tief_52w,
     )
@@ -392,28 +403,17 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         neue_aktion = aktion_aus_ki(
             urteil.aktion, modell, chance, (daten.datenstatus or "ok") == "ok", pruefung
         )
-        if neue_aktion == "abwarten" and neue_aktion != urteil.aktion and pruefung is not None:
+        if neue_aktion == "abwarten" and neue_aktion != urteil.aktion and chance is not None:
             urteil = Urteil(
                 "abwarten",
                 urteil.score,
                 "Nicht hinterherlaufen",
                 (
-                    f"Nicht prüfen: in {pruefung[1]} späteren Fällen lag das Modell nur {pruefung[0]}-mal richtig. "
+                    f"Nicht prüfen: die aktuelle Modellzahl ist {de_zahl(chance * 100, 0)}. "
+                    "Das ist keine kalibrierte Wahrscheinlichkeit. "
                     f"{urteil.grund}"
                 ),
                 "Das Modell spricht gegen einen Einstieg. Die Beobachtung läuft weiter.",
-            )
-        elif neue_aktion == "einstieg_pruefen" and neue_aktion != urteil.aktion and pruefung is not None:
-            urteil = Urteil(
-                "einstieg_pruefen",
-                urteil.score,
-                "Prüfen",
-                (
-                    f"Prüfen, weil das Modell in {pruefung[1]} späteren Fällen {pruefung[0]}-mal richtig lag. "
-                    "Das ist keine Kaufempfehlung. "
-                    f"{urteil.grund}"
-                ),
-                "In Trade Republic den Preis selbst prüfen. Das Programm kauft nicht.",
             )
     except (OSError, sqlite3.Error):
         pass
