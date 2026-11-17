@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -307,20 +307,17 @@ def zustand_nach_runde(alt: dict, zeilen: Sequence[Zeile], zeit: str):
 def sammle(symbole: Sequence[str], bei_zeile=None) -> tuple[Zeile, ...]:
     fx: dict = {}
     maerkte = _maerkte(symbole, fx)
-    kurse = _parallel(tuple(symbole), fx)
     zeilen: tuple[Zeile, ...] = ()
-    for symbol in symbole:
-        zeilen = zeilen + (bewerte(symbol, maerkte.get(vergleichsindex(symbol)), fx, kurse.get(symbol)),)
-        if bei_zeile is not None:
-            bei_zeile(zeilen)
-    return zeilen
-
-
-def _parallel(symbole: tuple[str, ...], fx: dict) -> dict:
     if not symbole:
-        return {}
+        return zeilen
     with ThreadPoolExecutor(max_workers=4) as pool:
-        return dict(pool.map(lambda symbol: (symbol, _kurs_oder_fehler(symbol, fx)), symbole))
+        laeuft = {pool.submit(_kurs_oder_fehler, symbol, fx): symbol for symbol in symbole}
+        for fertig in as_completed(laeuft):
+            symbol = laeuft[fertig]
+            zeilen = zeilen + (bewerte(symbol, maerkte.get(vergleichsindex(symbol)), fx, fertig.result()),)
+            if bei_zeile is not None:
+                bei_zeile(zeilen)
+    return zeilen
 
 
 def _kurs_oder_fehler(symbol: str, fx: dict):
@@ -379,7 +376,10 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
                 "abwarten",
                 urteil.score,
                 "Nicht hinterherlaufen",
-                urteil.grund,
+                (
+                    f"Nicht prüfen: bei {befund.anzahl} Fällen lag der Median nach 5 Handelstagen "
+                    f"bei {de_zahl(befund.median, 1)} %. {urteil.grund}"
+                ),
                 "Die bisherigen Fälle sprechen gegen einen Einstieg. Die Beobachtung läuft weiter.",
             )
     except (OSError, sqlite3.Error):
@@ -392,23 +392,29 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         neue_aktion = aktion_aus_ki(
             urteil.aktion, modell, chance, (daten.datenstatus or "ok") == "ok", pruefung
         )
-        if neue_aktion == "abwarten" and neue_aktion != urteil.aktion:
+        if neue_aktion == "abwarten" and neue_aktion != urteil.aktion and pruefung is not None:
             urteil = Urteil(
                 "abwarten",
                 urteil.score,
                 "Nicht hinterherlaufen",
-                urteil.grund,
+                (
+                    f"Nicht prüfen: in {pruefung[1]} späteren Fällen lag das Modell nur {pruefung[0]}-mal richtig. "
+                    f"{urteil.grund}"
+                ),
                 "Das Modell spricht gegen einen Einstieg. Die Beobachtung läuft weiter.",
             )
-        elif neue_aktion == "einstieg_pruefen" and neue_aktion != urteil.aktion:
+        elif neue_aktion == "einstieg_pruefen" and neue_aktion != urteil.aktion and pruefung is not None:
             urteil = Urteil(
                 "einstieg_pruefen",
                 urteil.score,
                 "Prüfen",
-                urteil.grund,
-                "Das Modell sieht ein Plus als wahrscheinlicher. In Trade Republic den Preis selbst prüfen.",
+                (
+                    f"Prüfen, weil das Modell in {pruefung[1]} späteren Fällen {pruefung[0]}-mal richtig lag. "
+                    "Das ist keine Kaufempfehlung. "
+                    f"{urteil.grund}"
+                ),
+                "In Trade Republic den Preis selbst prüfen. Das Programm kauft nicht.",
             )
-        urteil = Urteil(urteil.aktion, urteil.score, urteil.titel, f"{lern_satz} {urteil.grund}".strip(), urteil.hinweis_broker)
     except (OSError, sqlite3.Error):
         pass
     if befund is not None and aktion_aus_verkauf(
@@ -418,7 +424,10 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
             "verkauf_pruefen",
             urteil.score,
             "Verkauf prüfen",
-            urteil.grund,
+            (
+                f"Verkauf prüfen, weil {befund.eigene} eigene Fälle im Median "
+                f"{de_zahl(befund.eigene_median, 1)} % nach 5 Handelstagen liegen. Das ist kein Auftrag. {urteil.grund}"
+            ),
             "Kein Auftrag. In Trade Republic selbst prüfen, ob du verkaufen willst.",
         )
     try:
@@ -523,7 +532,7 @@ def _details(zahlen: Kennzahlen) -> str:
 def _preis(zeile: Zeile) -> str:
     if zeile.preis is None:
         return "—"
-    stellen = 2 if abs(zeile.preis) >= 100 else 3
+    stellen = 2 if abs(zeile.preis) >= 1 else 4
     betrag = de_zahl(zeile.preis, stellen)
     return f"{betrag} {zeile.waehrung}".rstrip()
 

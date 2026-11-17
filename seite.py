@@ -30,6 +30,16 @@ def lade_stand() -> dict:
         "uhr": "",
         "arbeitet": True,
         "karten": [],
+        "lernen": {
+            "abgeschlossen": 0,
+            "offen": 0,
+            "namen": 0,
+            "schwelle": 0,
+            "testbar": 0,
+            "modell": 0,
+            "text": "Noch nichts gelernt.",
+        },
+        "nachrichten": {"tag": {"meldungen": [], "offen": [], "hinweis": ""}, "woche": {"meldungen": [], "offen": [], "hinweis": ""}},
     }
 
 
@@ -77,7 +87,9 @@ def _karte(zeile) -> dict:
         "symbol": zeile.symbol,
         "name": kurzname(zeile),
         "preis": _preis(zeile),
+        "wert": zeile.preis,
         "tag": tag,
+        "tag_wert": zeile.tag_pct,
         "richtung": richtung,
         "titel": zeile.urteil.titel,
         "aktion": zeile.urteil.aktion,

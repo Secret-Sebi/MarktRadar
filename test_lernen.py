@@ -1,5 +1,6 @@
 """Nachrichtenwirkungen nur aus Kursen, die nach der Meldung liegen."""
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,10 +8,13 @@ from pathlib import Path
 from database import signal_speichern
 from kurse import Bar
 from lernen import (
+    Meldung,
     aktion_aus_lernen,
     aktion_aus_verkauf,
     aus_gdelt,
     aus_yahoo,
+    einfluss,
+    fortschritt,
     gegen_index,
     kategorie,
     nachtragen,
@@ -78,6 +82,34 @@ class WirkungTests(unittest.TestCase):
         self.assertTrue(soll_holen(None, 1000))
         self.assertFalse(soll_holen(1000, 2000, 1800))
         self.assertTrue(soll_holen(1000, 3000, 1800))
+
+    def test_fortschritt_und_einfluss_ohne_erfundene_wirkung(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            speichern(
+                pfad,
+                "SAP.DE",
+                (
+                    Meldung("SAP Zahlen", "Yahoo", 1_000, "https://a", "quartal"),
+                    Meldung("SAP offen", "Yahoo", 1_100, "https://c", "quartal"),
+                ),
+            )
+            speichern(pfad, "SIE.DE", (Meldung("Siemens Zahlen", "Yahoo", 1_200, "https://b", "quartal"),))
+            self.assertEqual(fortschritt(pfad)["offen"], 3)
+            self.assertIn("warten noch", fortschritt(pfad)["text"])
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute("UPDATE nachrichten SET wirkung_5 = -1.0, rel_5 = -0.5 WHERE url = ?", ("https://a",))
+                verbindung.execute("UPDATE nachrichten SET wirkung_5 = -6.0, rel_5 = -5.0 WHERE url = ?", ("https://b",))
+            bild = einfluss(pfad, 7, 1_000 + 3600)
+            self.assertEqual(bild["meldungen"][0]["symbole"][0]["symbol"], "SIE.DE")
+            self.assertEqual([eintrag["titel"] for eintrag in bild["meldungen"]], ["Siemens Zahlen", "SAP Zahlen"])
+            self.assertEqual(bild["offen"][0]["titel"], "SAP offen")
+            self.assertNotIn("SAP offen", [eintrag["titel"] for eintrag in bild["meldungen"]])
+            self.assertIn("Zusammenhang", bild["hinweis"])
+            ausserhalb = einfluss(pfad, 1, 1_000 + 3 * 86400)
+            self.assertFalse(ausserhalb["meldungen"])
+            self.assertIn("keine zugeordnete", ausserhalb["hinweis"])
+            self.assertEqual(fortschritt(pfad)["abgeschlossen"], 2)
 
 
 def statistik_leer():

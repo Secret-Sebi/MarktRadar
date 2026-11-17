@@ -54,10 +54,18 @@
   }
   aside {
     padding: 20px; overflow: auto;
+    display: flex; flex-direction: column;
     background: rgba(6, 22, 16, .86);
     border: 1px solid rgba(61, 255, 154, .28); border-radius: 18px;
     box-shadow: inset 0 0 40px rgba(61, 255, 154, .05), 0 0 28px rgba(61, 255, 154, .08);
   }
+  #chat { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; min-height: 240px; flex: 1; }
+  #verlauf { flex: 1; overflow: auto; max-height: 320px; display: flex; flex-direction: column; gap: 8px; }
+  .blase { margin: 0; padding: 8px 10px; border-radius: 12px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; }
+  .blase.ich { align-self: flex-end; background: rgba(61, 255, 154, .16); }
+  .blase.sie { align-self: flex-start; background: rgba(233, 255, 244, .06); }
+  #frage { display: flex; gap: 8px; }
+  #satz { flex: 1; min-width: 0; background: rgba(5, 16, 12, .85); color: #e9fff4; border: 1px solid rgba(61, 255, 154, .4); border-radius: 999px; padding: 7px 12px; font: inherit; }
   .marke, h2 {
     margin: 0 0 12px; color: var(--gruen); font-size: 11px; letter-spacing: .18em; font-weight: 700;
   }
@@ -82,8 +90,13 @@
   .preis { margin-left: auto; font-family: ui-monospace, Menlo, monospace; font-size: 16px; color: var(--gruen); }
   .meta { margin-top: 4px; font-size: 12px; }
   .chip { margin-left: auto; border-radius: 999px; padding: 2px 8px; border: 1px solid transparent; }
-  .grund, .extra { margin: 10px 0 0; line-height: 1.4; font-size: 13px; display: none; white-space: pre-wrap; }
-  .karte.offen .grund, .karte.offen .extra { display: block; }
+  .grund, .extra { margin: 10px 0 0; line-height: 1.4; font-size: 13px; white-space: pre-wrap; }
+  .grund { display: block; color: #d7ffe9; }
+  .extra { display: none; }
+  .karte.offen .extra { display: block; }
+  .meldung { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: rgba(7, 24, 18, .9); border: 1px solid rgba(61, 255, 154, .22); }
+  .meldung .titel { margin: 0; font-size: 14px; }
+  .meldung .meta, .betroffen { margin: 4px 0 0; color: #8fb9a4; font-size: 12px; }
   .raster.rang { grid-template-columns: 1fr; }
   .hoch { color: var(--gruen); text-shadow: 0 0 10px rgba(61, 255, 154, .45); }
   .runter { color: #ff6b7d; }
@@ -125,6 +138,14 @@
     <p id="status">Die Liste steht in der watchlist.txt.</p>
     <div id="treffer"></div>
     <p id="markt"></p>
+    <div id="chat">
+      <p class="marke">GESPRÄCH</p>
+      <div id="verlauf"></div>
+      <form id="frage">
+        <input id="satz" type="text" placeholder="Frag nach einem Namen" aria-label="Frage an MarktRadar" maxlength="500">
+        <button type="submit">Senden</button>
+      </form>
+    </div>
   </aside>
   <section id="karten"></section>
 </main>
@@ -283,6 +304,7 @@ function zeichnen(stand) {
   }));
   const stelle = karten.scrollTop;
   karten.replaceChildren();
+  karten.append(gelerntBlock(stand), nachrichtenBlock(stand));
   const alle = stand.karten || [];
   const leiste = filterleiste(alle);
   const kartenliste = alle.filter(passt);
@@ -302,9 +324,73 @@ function zeichnen(stand) {
     if (offen.has(eintrag.symbol)) block.classList.add("offen");
     raster.append(block);
   });
-  karten.append(raster);
-  karten.prepend(leiste);
+  karten.append(leiste, raster);
   karten.scrollTop = stelle;
+}
+
+function gelerntBlock(stand) {
+  const abschnitt = document.createElement("section");
+  const kopf = document.createElement("h2");
+  text(kopf, "GELERNT");
+  const satz = document.createElement("p");
+  satz.className = "leer";
+  text(satz, (stand.lernen && stand.lernen.text) || "Noch nichts gelernt.");
+  abschnitt.append(kopf, satz);
+  return abschnitt;
+}
+
+function nachrichtenBlock(stand) {
+  const abschnitt = document.createElement("section");
+  const kopf = document.createElement("h2");
+  text(kopf, "NACHRICHTEN");
+  const leiste = document.createElement("div");
+  leiste.className = "leiste";
+  const span = localStorage.getItem("marktradar-span") || "woche";
+  [["tag", "Tag"], ["woche", "Woche"]].forEach(function (paar) {
+    const knopfSpan = document.createElement("button");
+    knopfSpan.type = "button";
+    knopfSpan.className = "abt" + (span === paar[0] ? " aktiv" : "");
+    text(knopfSpan, paar[1]);
+    knopfSpan.addEventListener("click", function () {
+      localStorage.setItem("marktradar-span", paar[0]);
+      if (standJetzt) zeichnen(standJetzt);
+    });
+    leiste.append(knopfSpan);
+  });
+  const daten = (stand.nachrichten && stand.nachrichten[span]) || { meldungen: [], offen: [], hinweis: "" };
+  const hinweis = document.createElement("p");
+  hinweis.className = "leer";
+  text(hinweis, daten.hinweis || "Noch keine zugeordnete Meldung.");
+  abschnitt.append(kopf, leiste, hinweis);
+  (daten.meldungen || []).forEach(function (eintrag) { abschnitt.append(meldungsBlock(eintrag)); });
+  if (!(daten.meldungen || []).length) {
+    (daten.offen || []).forEach(function (eintrag) { abschnitt.append(meldungsBlock(eintrag)); });
+  }
+  return abschnitt;
+}
+
+function meldungsBlock(eintrag) {
+  const block = document.createElement("article");
+  block.className = "meldung";
+  const titel = document.createElement("p");
+  titel.className = "titel";
+  text(titel, eintrag.titel);
+  const meta = document.createElement("p");
+  meta.className = "meta";
+  text(meta, (eintrag.zeit || "") + " · " + (eintrag.quelle || ""));
+  const betroffen = document.createElement("p");
+  betroffen.className = "betroffen";
+  const namen = (eintrag.symbole || []).map(function (symbol) {
+    return nameZu(symbol.symbol) + ": " + symbol.bewegung + (symbol.relativ ? " (" + symbol.relativ + ")" : "");
+  });
+  text(betroffen, namen.join(" · ") || "Kein betroffener Name");
+  block.append(titel, meta, betroffen);
+  return block;
+}
+
+function nameZu(symbol) {
+  const karte = (standJetzt && standJetzt.karten || []).find(function (eintrag) { return eintrag.symbol === symbol; });
+  return karte ? karte.name : symbol;
 }
 
 function filterleiste(alle) {
@@ -377,6 +463,51 @@ document.getElementById("finden").addEventListener("click", async function () {
     });
     treffer.append(knopf);
   });
+});
+
+const verlauf = document.getElementById("verlauf");
+const schluessel = "marktradar-chat";
+
+function blase(rolle, inhalt) {
+  const satz = document.createElement("p");
+  satz.className = "blase " + rolle;
+  text(satz, inhalt);
+  verlauf.append(satz);
+  verlauf.scrollTop = verlauf.scrollHeight;
+}
+
+function merken(rolle, inhalt) {
+  blase(rolle, inhalt);
+  const alle = JSON.parse(localStorage.getItem(schluessel) || "[]");
+  alle.push({ rolle: rolle, inhalt: inhalt });
+  localStorage.setItem(schluessel, JSON.stringify(alle.slice(-40)));
+}
+
+JSON.parse(localStorage.getItem(schluessel) || "[]").forEach(function (eintrag) {
+  blase(eintrag.rolle, eintrag.inhalt);
+});
+if (!verlauf.childElementCount) {
+  blase("sie", "Frag mich nach einem Namen, den besten oder einem Verkaufshinweis. Ich antworte nur aus den geladenen Kursen.");
+}
+
+document.getElementById("frage").addEventListener("submit", async function (ereignis) {
+  ereignis.preventDefault();
+  const feld = document.getElementById("satz");
+  const satz = feld.value.trim();
+  if (!satz) return;
+  feld.value = "";
+  merken("ich", satz);
+  try {
+    const antwort = await fetch("/frage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: satz })
+    });
+    const daten = await antwort.json();
+    merken("sie", daten.antwort || "Ich habe gerade keine Antwort.");
+  } catch (fehler) {
+    merken("sie", "Die Verbindung zum Fenster ist gerade weg.");
+  }
 });
 
 laden();

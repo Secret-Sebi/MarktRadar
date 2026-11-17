@@ -10,7 +10,7 @@ Das Fenster lädt seine Seite von einem Programm auf diesem Mac, nur unter `127.
 python3 beobachter.py
 ```
 
-Oder `MarktRadar.command` doppelklicken.
+Oder `MarktRadar.command` doppelklicken. Links im Fenster bleibt ein Gespräch. Es antwortet nur aus den geladenen Kursen und den gespeicherten Fällen und bleibt auf diesem Mac.
 
 ```bash
 python3 beobachter.py --terminal
@@ -36,6 +36,8 @@ Alpha Vantage ist nicht angebunden. Dafür wäre ein eigener Schlüssel und das 
 Im Fenster filtert das Suchfeld die geladenen Karten. **Kürzel suchen** fragt Yahoo und CoinGecko. Ein Treffer wird an `watchlist.txt` angehängt. Vorhandene Zeilen und Kommentare bleiben. Die alte Grenze von 48 Kürzeln gilt nicht mehr.
 
 ## Lernen aus Nachrichten
+
+Oben in der Liste steht, wie viele Fälle abgeschlossen sind und was für eine Trefferquote noch fehlt. Darunter die drei Meldungen mit der größten späteren Kursbewegung, umschaltbar auf Tag oder Woche, mit den Namen aus der Überschrift. Ohne 5 spätere Handelstage heißt es, dass der Einfluss fehlt.
 
 Nachrichten kommen von Yahoo Finance und GDELT, aber höchstens alle 30 Minuten pro Kürzel. Eine Meldung wird nur zugeordnet, wenn Kürzel oder Name in der Überschrift stehen. Eine Branchenwirkung wird nicht geschätzt. Das Programm merkt sich Überschrift, Quelle, Zeitpunkt und Link in der lokalen Datei `daten/markt.sqlite`. Liegt der Vergleichsindex vor, wird die Bewegung nach fünf Handelstagen auch gegen diesen Index gerechnet. Das bleibt ein zeitlicher Zusammenhang, keine Ursache.
 

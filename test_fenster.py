@@ -5,7 +5,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 from analyse import BERLIN, Urteil
-from beobachter import Zeile, sammle
+from beobachter import Zeile, _preis, sammle
 from fenster import mach_server
 from kurse import Kursdaten, _wechselkurs
 from seite import seite_html, stand_bauen
@@ -19,6 +19,9 @@ class FensterTests(unittest.TestCase):
         self.assertIn("EINSCHÄTZUNG", html)
         self.assertNotIn("const klein = graph", html)
         self.assertIn("Suchen", html)
+        self.assertIn("GELERNT", html)
+        self.assertIn("NACHRICHTEN", html)
+        self.assertIn(".grund { display: block;", html)
         self.assertIn("stand.status || \"Die Kurse kommen.\"", html)
         self.assertNotIn("tkinter", html)
 
@@ -36,6 +39,7 @@ class FensterTests(unittest.TestCase):
         self.assertEqual(stand["pille"], "Wochenende")
         self.assertEqual(stand["karten"][0]["name"], "SAP")
         self.assertEqual(stand["karten"][0]["preis"], "213,45 EUR")
+        self.assertEqual(_preis(Zeile("SOL-USD", "Solana", "EUR", 65.81, -2.1, urteil, None)), "65,81 EUR")
         self.assertEqual(stand["karten"][0]["richtung"], "hoch")
         self.assertIn("Trade Republic", stand["karten"][0]["extra"])
         self.assertEqual(stand["karten"][0]["stufe"], "offen")

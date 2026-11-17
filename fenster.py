@@ -80,7 +80,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._senden(self.seite, "text/html; charset=utf-8")
 
     def do_POST(self):
-        if self.path.split("?", 1)[0] != "/liste":
+        pfad = self.path.split("?", 1)[0]
+        if pfad == "/frage":
+            self._frage()
+            return
+        if pfad != "/liste":
             self._senden(b'{"ok": false}', "application/json", 404)
             return
         laenge = int(self.headers.get("Content-Length") or "0")
@@ -93,6 +97,18 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self.neu()
         self._senden(json.dumps({"ok": True, "meldung": meldung}).encode("utf-8"), "application/json")
+
+    def _frage(self) -> None:
+        from gespraech import antwort
+
+        laenge = int(self.headers.get("Content-Length") or "0")
+        roh = self.rfile.read(min(laenge, 8000)) if laenge else b"{}"
+        try:
+            text = str(json.loads(roh.decode("utf-8")).get("text") or "")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            text = ""
+        satz = antwort(text, self.bild.lesen())
+        self._senden(json.dumps({"antwort": satz}, ensure_ascii=False).encode("utf-8"), "application/json")
 
     def log_message(self, fmt, *args):
         return
@@ -114,14 +130,14 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
     while not zu.is_set():
         symbole_jetzt = symbole or lade_liste(LISTE)
         _markiere(bild, True)
-        start = dict(bild.lesen())
+        start = _mit_lernen(dict(bild.lesen()))
         start["status"] = "Der erste Kurs wird geladen."
         bild.setzen(start)
 
         gesamt = len(symbole_jetzt)
 
         def teilweise(zeilen, anzahl=gesamt):
-            stand = stand_bauen(zeilen, datetime.now(BERLIN), 0, True)
+            stand = _mit_lernen(stand_bauen(zeilen, datetime.now(BERLIN), 0, True))
             stand["status"] = f"{len(zeilen)} von {anzahl} geladen"
             bild.setzen(stand)
 
@@ -129,7 +145,7 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
             moment, zeilen, zustand, naechste = beobachte(
                 symbole_jetzt, zustand, ausgabe, sekunden, bei_zeile=teilweise
             )
-            bild.setzen(stand_bauen(zeilen, moment, naechste))
+            bild.setzen(_mit_lernen(stand_bauen(zeilen, moment, naechste)))
         except Exception as fehler:  # noqa: BLE001
             naechste = 60
             bild.setzen(fehler_stand(str(fehler)))
@@ -137,6 +153,17 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
             return
         sofort.wait(naechste)
         sofort.clear()
+
+
+def _mit_lernen(stand: dict) -> dict:
+    from beobachter import DATENBANK
+    from lernen import einfluss, fortschritt
+
+    return {
+        **stand,
+        "lernen": fortschritt(DATENBANK),
+        "nachrichten": {"tag": einfluss(DATENBANK, 1), "woche": einfluss(DATENBANK, 7)},
+    }
 
 
 def _suche(pfad: str) -> dict:

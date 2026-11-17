@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.request import urlopen
 
-from analyse import de_zahl
+from analyse import BERLIN, de_prozent, de_zahl
 from quellen import hole_text
 
 _THEMEN = (
@@ -189,6 +189,58 @@ def aktion_aus_verkauf(aktion: str, eigene: int, median: float | None, daten_ok:
     return "verkauf_pruefen"
 
 
+def fortschritt(pfad: Path) -> dict:
+    if not pfad.exists():
+        return _lernstand(0, 0, 0, 0, 0, 0)
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        abgeschlossen = _anzahl(verbindung, True)
+        offen = _anzahl(verbindung, False)
+        namen = _anzahl(verbindung, True, True)
+        schwelle = len(_namen_ab(verbindung, _MINDEST, False))
+        from ki import _MINDEST as ki_mindest
+
+        testbar = len(_namen_ab(verbindung, ki_mindest * 2, True))
+        modell = _modell_faelle(verbindung)
+    return _lernstand(abgeschlossen, offen, namen, schwelle, testbar, modell)
+
+
+def einfluss(pfad: Path, tage: int = 7, jetzt: int | None = None, grenze: int = 3) -> dict:
+    moment = int(time.time()) if jetzt is None else int(jetzt)
+    leer = {"meldungen": [], "offen": [], "hinweis": "In diesem Zeitraum liegt keine zugeordnete Meldung."}
+    if not pfad.exists() or tage < 1:
+        return leer
+    anfang = moment - tage * 86400
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeilen = verbindung.execute(
+            """
+            SELECT url, symbol, zeit, titel, quelle, wirkung_5, rel_5
+            FROM nachrichten
+            WHERE zeit >= ?
+            ORDER BY zeit DESC
+            """,
+            (anfang,),
+        ).fetchall()
+    if not zeilen:
+        return leer
+    gruppen = _gruppen(zeilen)
+    gemessen = tuple(gruppe for gruppe in gruppen if gruppe["staerke"] is not None)
+    gemessen = tuple(sorted(gemessen, key=lambda gruppe: (-gruppe["staerke"], -gruppe["zeit"])))[:grenze]
+    ohne = tuple(gruppe for gruppe in gruppen if gruppe["staerke"] is None)[:grenze]
+    hinweis = (
+        "Sortiert nach der größten späteren Kursbewegung. Das ist ein Zusammenhang, keine Ursache. "
+        "Betroffen ist nur, wer in der Überschrift vorkam."
+        if gemessen
+        else "Noch keine Meldung in diesem Zeitraum hat 5 spätere Handelstage. Deshalb nenne ich keinen Einfluss."
+    )
+    return {
+        "meldungen": tuple(_sicht(gruppe, True) for gruppe in gemessen),
+        "offen": tuple(_sicht(gruppe, False) for gruppe in ohne),
+        "hinweis": hinweis,
+    }
+
+
 def satz(befund: Befund) -> str:
     if befund.umfang == "keine Meldung":
         return "Zu diesem Kürzel liegen noch keine auswertbaren Nachrichten vor."
@@ -322,6 +374,107 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _lernstand(abgeschlossen: int, offen: int, namen: int, schwelle: int, testbar: int, modell: int) -> dict:
+    if abgeschlossen == 0 and offen == 0:
+        text = (
+            "Noch nichts gelernt. Es braucht Meldungen mit Kürzel oder Name in der Überschrift, "
+            "danach 5 spätere Handelstage. Der Mac muss dafür an sein."
+        )
+    else:
+        text = (
+            f"Abgeschlossen sind {abgeschlossen} Fälle bei {namen} Namen, {offen} Meldungen warten noch auf 5 spätere Handelstage. "
+            f"Das Modell hat {modell} Fälle gesehen. "
+            f"{schwelle} Namen haben mindestens {_MINDEST} eigene Fälle, {testbar} Namen haben genug für eine Trefferquote. "
+            "Dafür braucht ein Name 24 abgeschlossene Fälle, 12 davon nur für den Test. "
+            "Unklare Überschriften zählen nicht, und bei geschlossenem Mac kommt nichts dazu."
+        )
+    return {
+        "abgeschlossen": abgeschlossen,
+        "offen": offen,
+        "namen": namen,
+        "schwelle": schwelle,
+        "testbar": testbar,
+        "modell": modell,
+        "text": text,
+    }
+
+
+def _anzahl(verbindung: sqlite3.Connection, abgeschlossen: bool, namen: bool = False) -> int:
+    if namen:
+        zeile = verbindung.execute(
+            "SELECT COUNT(DISTINCT symbol) FROM nachrichten WHERE wirkung_5 IS NOT NULL"
+        ).fetchone()
+    elif abgeschlossen:
+        zeile = verbindung.execute("SELECT COUNT(*) FROM nachrichten WHERE wirkung_5 IS NOT NULL").fetchone()
+    else:
+        zeile = verbindung.execute("SELECT COUNT(*) FROM nachrichten WHERE wirkung_5 IS NULL").fetchone()
+    return int(zeile[0] or 0)
+
+
+def _namen_ab(verbindung: sqlite3.Connection, mindest: int, nur_klar: bool) -> tuple:
+    if nur_klar:
+        return verbindung.execute(
+            """
+            SELECT symbol FROM nachrichten
+            WHERE wirkung_5 IS NOT NULL AND kategorie != 'unklar'
+            GROUP BY symbol
+            HAVING COUNT(*) >= ?
+            """,
+            (mindest,),
+        ).fetchall()
+    return verbindung.execute(
+        """
+        SELECT symbol FROM nachrichten
+        WHERE wirkung_5 IS NOT NULL
+        GROUP BY symbol
+        HAVING COUNT(*) >= ?
+        """,
+        (mindest,),
+    ).fetchall()
+
+
+def _modell_faelle(verbindung: sqlite3.Connection) -> int:
+    try:
+        zeile = verbindung.execute("SELECT beispiele FROM ki_modell WHERE id = 1").fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return 0 if zeile is None else int(zeile[0])
+
+
+def _gruppen(zeilen) -> tuple:
+    gruppen: dict[str, dict] = {}
+    for url, symbol, zeit, titel, quelle, wirkung_5, rel_5 in zeilen:
+        gruppe = gruppen.get(url)
+        if gruppe is None:
+            gruppe = {"url": url, "titel": titel, "quelle": quelle, "zeit": int(zeit), "symbole": [], "staerke": None}
+            gruppen[url] = gruppe
+        staerke = None if wirkung_5 is None else abs(float(rel_5 if rel_5 is not None else wirkung_5))
+        if staerke is not None and (gruppe["staerke"] is None or staerke > gruppe["staerke"]):
+            gruppe["staerke"] = staerke
+            gruppe["zeit"] = int(zeit)
+        gruppe["symbole"].append(
+            {"symbol": symbol, "wirkung": None if wirkung_5 is None else float(wirkung_5), "relativ": None if rel_5 is None else float(rel_5)}
+        )
+    return tuple(gruppen.values())
+
+
+def _sicht(gruppe: dict, gemessen: bool) -> dict:
+    return {
+        "titel": gruppe["titel"],
+        "quelle": gruppe["quelle"],
+        "zeit": datetime.fromtimestamp(gruppe["zeit"], BERLIN).strftime("%d.%m. %H:%M"),
+        "symbole": tuple(
+            {
+                "symbol": eintrag["symbol"],
+                "bewegung": "Wirkung fehlt" if eintrag["wirkung"] is None else de_prozent(eintrag["wirkung"]),
+                "relativ": "" if eintrag["relativ"] is None else f"{de_prozent(eintrag['relativ'])} zum Index",
+            }
+            for eintrag in gruppe["symbole"]
+        ),
+        "gemessen": gemessen,
+    }
 
 
 def _letzter_abruf(pfad: Path, symbol: str) -> int | None:
