@@ -148,6 +148,51 @@ def trefferquote(faelle: tuple[tuple[tuple[float, ...], int], ...]) -> tuple[int
     return treffer, _MINDEST
 
 
+def bekanntes_thema(name: str) -> str:
+    return name if name in _THEMEN else "unklar"
+
+
+def eigene_entscheidung(modell: Modell, balken, thema: str) -> tuple[bool, str]:
+    if modell.beispiele < _MINDEST:
+        return False, (
+            f"Das Modell hat {modell.beispiele} abgeschlossene Tage. "
+            f"Unter {_MINDEST} entscheidet es noch nicht."
+        )
+    eingabe = merkmale(balken, None, thema)
+    if eingabe is None:
+        return False, "Dem Modell fehlen die Kurse vor der Entscheidung."
+    chance = wahrscheinlichkeit(modell, eingabe)
+    if chance >= 0.5:
+        return True, f"Das Modell entscheidet selbst für einen Kauf. Es hat {modell.beispiele} abgeschlossene Tage gesehen."
+    return False, f"Das Modell entscheidet selbst dagegen. Es hat {modell.beispiele} abgeschlossene Tage gesehen."
+
+
+def lies_modell(pfad: Path) -> Modell:
+    if not pfad.exists():
+        return leeres_modell()
+    with sqlite3.connect(pfad) as verbindung:
+        _tabellen(verbindung)
+        return _lesen(verbindung)
+
+
+def setze_modell(pfad: Path, modell: Modell) -> None:
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(pfad) as verbindung:
+        _tabellen(verbindung)
+        _schreiben(verbindung, modell)
+
+
+def lerne_ausgang(pfad: Path, balken, thema: str, zeitpunkt: int, ziel: float) -> Modell | None:
+    eingabe = merkmale(balken, zeitpunkt, thema)
+    if eingabe is None:
+        return None
+    with sqlite3.connect(pfad) as verbindung:
+        _tabellen(verbindung)
+        modell = schritt(_lesen(verbindung), eingabe, ziel)
+        _schreiben(verbindung, modell)
+    return modell
+
+
 def aktion_aus_ki(
     aktion: str,
     modell: Modell,

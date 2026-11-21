@@ -244,6 +244,51 @@ class WirkungTests(unittest.TestCase):
             self.assertEqual(namen, {"SAP.DE", "ALV.DE"})
 
 
+class AbrufTests(unittest.TestCase):
+    def test_fehlschlag_und_leere_quelle_werden_unterschieden(self):
+        from lernen import _holen, einordnung, nachrichten_stand
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+
+            def ausfall(_anfrage, timeout=12):
+                raise TimeoutError("weg")
+
+            _holen(pfad, "AAA", "Alpha", ausfall, jetzt=1_000)
+            self.assertEqual(ohne_langen_abruf(pfad, ("AAA",)), ("AAA",))
+            self.assertEqual(nachrichten_stand(pfad, ("AAA",))["fehlgeschlagen"], 1)
+
+            class Antwort:
+                def read(self):
+                    return b'{"news":[],"articles":[]}'
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+            _holen(pfad, "AAA", "Alpha", lambda _anfrage, timeout=12: Antwort(), jetzt=5_000)
+            self.assertEqual(ohne_langen_abruf(pfad, ("AAA",)), ())
+            self.assertEqual(nachrichten_stand(pfad, ("AAA",))["keine"], 1)
+        art, ton, quelle = einordnung("SAP meldet Zahlen", "Reuters")
+        self.assertEqual((art, ton, quelle), ("unternehmen", "fakt", "bekannte Quelle"))
+        self.assertEqual(einordnung("Fed hält den Leitzins", "blog")[0], "makro")
+        self.assertEqual(einordnung("Gerücht um eine Übernahme", "blog")[1], "spekulation")
+
+    def test_alter_abruf_ohne_stand_bleibt_offen(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "CREATE TABLE abruf (symbol TEXT NOT NULL, art TEXT NOT NULL, zeit INTEGER NOT NULL, PRIMARY KEY (symbol, art))"
+                )
+                verbindung.execute("INSERT INTO abruf (symbol, art, zeit) VALUES ('AAA', 'news-16w', 10)")
+            self.assertEqual(ohne_langen_abruf(pfad, ("AAA",)), ("AAA",))
+            speichern(pfad, "AAA", (Meldung("AAA meldet Zahlen", "Reuters", 10, "https://a", "quartal"),))
+            self.assertEqual(ohne_langen_abruf(pfad, ("AAA",)), ())
+
+
 def statistik_leer():
     from lernen import Befund
 

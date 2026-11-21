@@ -4,7 +4,9 @@ __pycache__/
 .env
 graphify-out/
 daten/*.sqlite
+daten/*.sqlite.bak-*
 daten/nachholen.log
 daten/fenster.pid
 daten/universum.txt
 zustand.json
+daten/papier_zustand.json

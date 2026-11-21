@@ -1,9 +1,11 @@
 """Dunkle Seite für das eigene Fenster. Die Texte kommen aus derselben Rechnung."""
 
+from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
 
-from analyse import BERLIN, de_prozent, de_zahl, handels_hinweis
+from analyse import BERLIN, de_zahl, handels_hinweis
 from analyse import fenster as handelsfenster
 from ansicht import briefing, einzelheiten, kurzname, lage, potenzial
 from beobachter import _kurs_prozent, _preis, _sortiert, _warte_text
@@ -96,7 +98,11 @@ def _karte(zeile) -> dict:
         "markt": getattr(zeile, "markt", "") or "",
         "aufwaerts": _aufwaerts(zeile),
         "fenster_faelle": _fenster_faelle(zeile),
+        "muster": _muster_text(zeile),
+        "muster_version": 3 if getattr(zeile, "muster", None) else None,
         "vorschlag": _vorschlag_text(zeile),
+        "horizonte": list((getattr(zeile, "muster", None) or {}).get("horizonte") or []),
+        "qualitaet": str((getattr(zeile, "muster", None) or {}).get("qualitaet") or ""),
         "datenstatus": getattr(zeile, "datenstatus", "") or "",
         "wert": zeile.preis,
         "tag": tag,
@@ -168,14 +174,20 @@ def _fenster_faelle(zeile) -> int:
     return wert
 
 
+def _muster_text(zeile) -> str | None:
+    bild = getattr(zeile, "muster", None)
+    if not isinstance(bild, dict):
+        return None
+    from muster import als_json
+
+    return als_json(bild)
+
+
 def _vorschlag_text(zeile) -> str:
-    wert = _aufwaerts(zeile)
-    if wert is None:
-        faelle = _fenster_faelle(zeile)
-        if 0 < faelle < 8:
-            return f"Für einen Vorschlag fehlen noch Fälle: {faelle} von 8."
-        return ""
-    return f"Vorschlag: Median nach 3 Tagen {de_prozent(wert)}. Kein Auftrag."
+    bild = getattr(zeile, "muster", None)
+    if isinstance(bild, dict) and bild.get("satz"):
+        return str(bild["satz"])
+    return ""
 
 
 def _stempel(wert):

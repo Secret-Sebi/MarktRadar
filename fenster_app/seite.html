@@ -74,7 +74,27 @@
   #status { margin: 14px 0 0; }
   #markt { margin: 10px 0 0; }
   #einschaetzung { margin: 12px 0 0; color: #d7f5e4; font-size: 13px; line-height: 1.45; }
-  .vorschlag { margin: 8px 0 0; color: #d7f5e4; font-size: 13px; line-height: 1.4; }
+  #papier { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  #papier-modus { margin: 0; font-size: 12px; line-height: 1.4; }
+  .papier-knopf { display: flex; flex-wrap: wrap; gap: 8px; }
+  #flaeche { min-width: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding-right: 4px; }
+  #karten { overflow: visible; }
+  #papier-brett { display: none; }
+  body.alpaka #papier-brett { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  body.alpaka #karten { display: none; }
+  .buch { padding: 16px; border-radius: 18px; border: 1px solid rgba(61, 255, 154, .28); background: rgba(6, 22, 16, .86); }
+  .buch h2 { margin-bottom: 4px; }
+  .buch .regel, .buch .bar, .nicht { margin: 6px 0 0; color: #8fb9a4; font-size: 12px; line-height: 1.4; }
+  .buch .geld { margin: 6px 0 0; color: #e9fff4; font-size: 20px; line-height: 1.2; }
+  .standzahl { margin: 8px 0 0; font-size: 34px; font-weight: 700; letter-spacing: -.03em; line-height: 1; }
+  .standzahl.plus { color: #3dff9a; }
+  .standzahl.minus { color: #ff8b98; }
+  .standzahl.null { color: #e9fff4; }
+  .kauf { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(61, 255, 154, .16); }
+  .kauf strong { display: block; font-size: 18px; }
+  .kauf .standzahl { font-size: 28px; }
+  .kauf .kurs { margin: 4px 0 0; color: #d7f5e4; font-size: 14px; }
+  .vorschlag { margin: 8px 0 0; color: #d7f5e4; font-size: 13px; line-height: 1.4; white-space: pre-line; }
   .anteil .zeile { font-size: 12px; }
   .anteil strong { margin-left: auto; color: #e9fff4; font-weight: 650; }
   .spur { position: relative; height: 8px; margin-top: 4px; border-radius: 999px; background: rgba(233, 255, 244, .08); overflow: hidden; }
@@ -149,7 +169,7 @@
   .fuell.niedrig { background: #ff6b7d; box-shadow: 0 0 12px #ff6b7d; }
   @media (max-width: 980px) {
     main { grid-template-columns: 1fr; height: auto; }
-    .raster { grid-template-columns: 1fr; }
+    .raster, #papier-brett { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -173,6 +193,15 @@
     <p id="einschaetzung"></p>
     <div id="treffer"></div>
     <p id="markt"></p>
+    <section id="papier">
+      <p class="marke">KI PAPER TRADING</p>
+      <p id="papier-modus">Simulation. Kein echtes Geld. Paper-Handel ist aus.</p>
+      <div class="papier-knopf">
+        <button id="papier-zeigen" type="button">Alpaka</button>
+        <button id="papier-an" type="button">Paper-Handel einschalten</button>
+        <button id="papier-stopp" type="button">Stopp</button>
+      </div>
+    </section>
     <div id="chat">
       <p class="marke">GESPRÄCH</p>
       <div id="verlauf"></div>
@@ -182,7 +211,10 @@
       </form>
     </div>
   </aside>
-  <section id="karten"></section>
+  <div id="flaeche">
+    <section id="papier-brett"></section>
+    <section id="karten"></section>
+  </div>
 </main>
 <script>
 const SVG = "http://www.w3.org/2000/svg";
@@ -301,6 +333,18 @@ function bewegungsBalken(wert, weit) {
   return spur;
 }
 
+function qualitaetName(name) {
+  const namen = {
+    zu_klein: "Datenbasis zu klein",
+    vorsichtig: "Vorsichtig",
+    belastbarer: "Belastbarer",
+    index_fehlt: "Index fehlt",
+    unbereinigt: "Nicht splitbereinigt",
+    kein_vorsprung: "Kein Vorsprung"
+  };
+  return namen[name] || name;
+}
+
 function chip(name) {
   const span = document.createElement("span");
   text(span, name);
@@ -344,6 +388,7 @@ function karte(eintrag, weit) {
   if (eintrag.fenster) chips.append(chip("Fenster"));
   if (eintrag.ungewoehnlich) chips.append(chip("Seltener Tag"));
   if (eintrag.markt) chips.append(chip("Mit dem Markt"));
+  if (eintrag.qualitaet) chips.append(chip(qualitaetName(eintrag.qualitaet) + " · " + (eintrag.fenster_faelle || 0) + " Fälle"));
   if (chips.childElementCount) block.append(chips);
   if (typeof eintrag.tag_wert === "number") {
     const bewegung = document.createElement("div");
@@ -445,7 +490,7 @@ function nachObenBlock(liste) {
   const mit = liste.filter(function (eintrag) { return typeof eintrag.aufwaerts === "number"; });
   if (!mit.length) {
     const satz = document.createElement("p");
-    text(satz, "Noch kein Name mit 8 eigenen Fällen und positivem Median.");
+    text(satz, "Noch kein Name mit 30 unabhängigen Fällen und einem Vorsprung nach Kosten und Index.");
     block.append(satz);
     return block;
   }
@@ -457,7 +502,7 @@ function nachObenBlock(liste) {
     text(name, eintrag.name);
     const pct = document.createElement("strong");
     pct.className = "hoch";
-    text(pct, eintrag.vorschlag || "");
+    text(pct, qualitaetName(eintrag.qualitaet || "") + " · " + (eintrag.fenster_faelle || 0) + " Fälle");
     zeile.append(name, bewegungsBalken(eintrag.aufwaerts, weit), pct);
     block.append(zeile);
   });
@@ -492,6 +537,104 @@ function erklaerungBlock(stand) {
   return block;
 }
 
+function papierZeichnen(papier) {
+  papier = papier || {};
+  const schalter = document.getElementById("papier-an");
+  text(document.getElementById("papier-modus"), (papier.modus || "Simulation. Kein echtes Geld.") + " " + (papier.hinweis || "Paper-Handel ist aus."));
+  text(schalter, papier.automatisch ? "Paper-Handel ausschalten" : "Paper-Handel einschalten");
+  const brett = document.getElementById("papier-brett");
+  brett.replaceChildren();
+  (papier.konten || []).forEach(function (konto) {
+    brett.append(kontoKarte(konto));
+  });
+}
+
+function euroWort(wert) {
+  return String(wert || "0,00 €").replace("€", "Euro").replace(/^[+−-]\s*/, "").trim();
+}
+
+function ergebnisWort(klasse, wert) {
+  const betrag = euroWort(wert);
+  if (klasse === "plus") return "Plus " + betrag;
+  if (klasse === "minus") return "Minus " + betrag;
+  return "0 Euro";
+}
+
+function kontoKarte(konto) {
+  const karte = document.createElement("article");
+  karte.className = "buch";
+  const name = document.createElement("h2");
+  text(name, konto.name);
+  const gesamt = document.createElement("p");
+  gesamt.className = "standzahl";
+  text(gesamt, euroWort(konto.equity));
+  const cash = document.createElement("p");
+  cash.className = "geld";
+  text(cash, euroWort(konto.cash) + " Cash");
+  const aktien = document.createElement("p");
+  aktien.className = "geld";
+  text(aktien, euroWort(konto.angelegt) + " in Aktien");
+  const ergebnis = document.createElement("p");
+  ergebnis.className = "standzahl " + (konto.klasse || "null");
+  text(ergebnis, ergebnisWort(konto.klasse, konto.differenz));
+  const satz = document.createElement("p");
+  satz.className = "regel";
+  text(satz, konto.satz || konto.regel);
+  karte.append(name, gesamt, cash, aktien, ergebnis, satz);
+  const kauefe = konto.positionen || [];
+  if (!kauefe.length) {
+    const leer = document.createElement("p");
+    leer.className = "kauf";
+    text(leer, "Noch nichts gekauft.");
+    karte.append(leer);
+  }
+  kauefe.forEach(function (eintrag) {
+    const block = document.createElement("div");
+    block.className = "kauf";
+    const titel = document.createElement("strong");
+    text(titel, eintrag.symbol);
+    const ergebnisKauf = document.createElement("p");
+    ergebnisKauf.className = "standzahl " + (eintrag.klasse || "null");
+    text(ergebnisKauf, ergebnisWort(eintrag.klasse, eintrag.differenz));
+    const kurs = document.createElement("p");
+    kurs.className = "kurs";
+    text(kurs, "Einkauf " + euroWort(eintrag.einstieg));
+    block.append(titel, ergebnisKauf, kurs);
+    karte.append(block);
+  });
+  (konto.nicht || []).forEach(function (eintrag) {
+    const zeile = document.createElement("p");
+    zeile.className = "nicht";
+    text(zeile, (eintrag.symbol || "Liste") + " nicht gekauft. " + eintrag.grund);
+    karte.append(zeile);
+  });
+  return karte;
+}
+
+async function papierSenden(inhalt) {
+  const schalter = document.getElementById("papier-an");
+  const stopp = document.getElementById("papier-stopp");
+  schalter.disabled = true;
+  stopp.disabled = true;
+  text(document.getElementById("papier-modus"), "Simulation. Kein echtes Geld. Schaltet …");
+  try {
+    const antwort = await fetch("/papier", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(inhalt) });
+    const daten = await antwort.json();
+    if (!standJetzt) standJetzt = {};
+    if (daten.papier) {
+      standJetzt.papier = daten.papier;
+      papierZeichnen(daten.papier);
+    } else {
+      text(document.getElementById("papier-modus"), "Simulation. Kein echtes Geld. " + (daten.meldung || "Hat nicht geklappt."));
+    }
+    zuletzt = "";
+  } catch (fehler) {
+    text(document.getElementById("papier-modus"), "Simulation. Kein echtes Geld. Die Schaltung hat den Server nicht erreicht.");
+  }
+  schalter.disabled = false;
+  stopp.disabled = false;
+}
+
 function zeichnen(stand) {
   standJetzt = stand;
   text(brief, stand.briefing);
@@ -508,6 +651,7 @@ function zeichnen(stand) {
   }));
   const stelle = karten.scrollTop;
   karten.replaceChildren();
+  papierZeichnen(stand.papier || {});
   karten.append(gelerntBlock(stand), erklaerungBlock(stand), nachrichtenBlock(stand));
   const alle = stand.karten || [];
   const leiste = filterleiste(alle);
@@ -594,8 +738,11 @@ function meldungsBlock(eintrag) {
   text(titel, eintrag.titel);
   const meta = document.createElement("p");
   meta.className = "meta";
-  text(meta, (eintrag.zeit || "") + " · " + (eintrag.quelle || ""));
-  block.append(titel, meta);
+  text(meta, (eintrag.zeit || "") + " · " + (eintrag.quelle || "") + " · " + (eintrag.art || "Einordnung fehlt") + " · " + (eintrag.ton || "unklar") + " · " + (eintrag.quellenhinweis || ""));
+  const grenze = document.createElement("p");
+  grenze.className = "leer";
+  text(grenze, "Der Kurs danach beweist die Ursache nicht.");
+  block.append(titel, meta, grenze);
   const zahlen = (eintrag.symbole || []).map(function (symbol) { return symbol.zahl; }).filter(function (zahl) {
     return typeof zahl === "number";
   });
@@ -614,7 +761,7 @@ function meldungsBlock(eintrag) {
       zeile.append(pct);
     } else {
       const fehlt = document.createElement("span");
-      text(fehlt, "Wirkung fehlt");
+      text(fehlt, "Kursreaktion offen");
       zeile.append(fehlt);
     }
     block.append(zeile);
@@ -677,6 +824,19 @@ async function laden() {
     zeichnen(JSON.parse(roh));
   } catch (fehler) {}
 }
+
+document.getElementById("papier-zeigen").addEventListener("click", function () {
+  const an = !document.body.classList.contains("alpaka");
+  document.body.classList.toggle("alpaka", an);
+  text(this, an ? "Zurück zu den Aktien" : "Alpaka");
+});
+document.getElementById("papier-an").addEventListener("click", function () {
+  const an = !(standJetzt && standJetzt.papier && standJetzt.papier.automatisch);
+  papierSenden({ automatisch: an, bestaetigung: an ? "PAPIER" : "", notfall: false });
+});
+document.getElementById("papier-stopp").addEventListener("click", function () {
+  papierSenden({ automatisch: false, bestaetigung: "", notfall: true });
+});
 
 knopf.addEventListener("click", async function () {
   knopf.disabled = true;

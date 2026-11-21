@@ -6,10 +6,14 @@ from pathlib import Path
 
 from ki import (
     aktion_aus_ki,
+    eigene_entscheidung,
     ki_satz,
     leeres_modell,
+    lerne_ausgang,
+    lies_modell,
     merkmale,
     schritt,
+    setze_modell,
     trainiere,
     trefferquote,
     wahrscheinlichkeit,
@@ -62,6 +66,28 @@ class ModellTests(unittest.TestCase):
             nachtragen(pfad, "SAP.DE", balken)
             dritter = trainiere(pfad, "SAP.DE", balken)
             self.assertEqual(dritter.beispiele, erster.beispiele)
+
+    def test_modell_entscheidet_selbst_und_lernt_den_ausgang_einmal(self):
+        balken = _kursreihe(10, 30)
+        leer = leeres_modell()
+        self.assertFalse(eigene_entscheidung(leer, balken, "zinsen")[0])
+        self.assertIn("noch nicht", eigene_entscheidung(leer, balken, "zinsen")[1])
+        eingabe = merkmale(balken, None, "zinsen")
+        modell = leer
+        for _ in range(12):
+            modell = schritt(modell, eingabe, 1.0)
+        kauf, satz = eigene_entscheidung(modell, balken, "zinsen")
+        self.assertTrue(kauf)
+        self.assertIn("selbst", satz)
+        self.assertEqual(aktion_aus_ki("beobachten", modell, 0.8, True), "beobachten")
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            setze_modell(pfad, modell)
+            vorher = lies_modell(pfad).beispiele
+            self.assertIsNotNone(lerne_ausgang(pfad, balken, "zinsen", 2900, 0.0))
+            self.assertEqual(lies_modell(pfad).beispiele, vorher + 1)
+            self.assertIsNone(lerne_ausgang(pfad, balken[:5], "zinsen", 2900, 1.0))
+            self.assertEqual(lies_modell(pfad).beispiele, vorher + 1)
 
     def test_ungepruefte_wahrscheinlichkeit_aendert_nichts(self):
         positiv = leeres_modell()

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +30,8 @@ _FELDER = (
     "markt",
     "aufwaerts",
     "fenster_faelle",
+    "muster",
+    "muster_version",
 )
 
 
@@ -161,34 +165,88 @@ def anzahl(pfad: Path) -> int:
 def chancen_nachtragen(pfad: Path) -> int:
     if not pfad.exists():
         return 0
-    from analyse import fenster_chance, kennzahlen_aus_schluessen
+    from analyse import kennzahlen_aus_schluessen
+    from lernen import _tabelle as kurse_tabelle
+    from muster import VERSION, als_json, pruefen
+    from technik import vergleichsindex
 
     with sqlite3.connect(pfad) as verbindung:
+        kurse_tabelle(verbindung)
         _tabelle(verbindung)
+        verbindung.execute(
+            """
+            UPDATE auswertung
+            SET aufwaerts = NULL, fenster_faelle = 0
+            WHERE datenstatus = 'ok' AND (muster_version IS NULL OR muster_version < ?)
+            """,
+            (VERSION,),
+        )
         offen = verbindung.execute(
-            "SELECT symbol, bereich FROM auswertung WHERE fenster_faelle IS NULL AND datenstatus = 'ok'"
+            """
+            SELECT symbol, bereich FROM auswertung
+            WHERE datenstatus = 'ok' AND (muster_version IS NULL OR muster_version < ?)
+            """,
+            (VERSION,),
         ).fetchall()
         updates = []
         for symbol, bereich in offen:
-            try:
-                reihe = verbindung.execute(
-                    "SELECT schluss FROM kurse WHERE symbol = ? ORDER BY zeit",
-                    (symbol,),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                reihe = []
-            schluesse = tuple(float(zeile[0]) for zeile in reihe if zeile[0])
+            aktie, bereinigt = _kursreihe(verbindung, str(symbol))
+            index_symbol = vergleichsindex(str(symbol))
+            index, index_bereinigt = _kursreihe(verbindung, index_symbol) if index_symbol else ((), False)
+            schluesse, index_schluesse = _angleichen(aktie, index if index_bereinigt else ())
+            ist_etf = str(bereich or "") == "ETFs"
             if len(schluesse) < 50:
-                updates.append((None, 0, str(symbol)))
-                continue
-            zahlen = kennzahlen_aus_schluessen(schluesse, str(bereich or "") == "ETFs", None)
-            chance, faelle = fenster_chance(zahlen, schluesse)
-            updates.append((chance, faelle, str(symbol)))
+                bild = {"satz": "Datenbasis zu klein.", "rang": None, "faelle": 0, "qualitaet": "zu_klein", "horizonte": []}
+            else:
+                zahlen = kennzahlen_aus_schluessen(schluesse, ist_etf, None)
+                bild = pruefen(zahlen, schluesse, index_schluesse, bereinigt)
+            updates.append((bild["rang"], int(bild["faelle"]), als_json(bild), VERSION, str(symbol)))
         verbindung.executemany(
-            "UPDATE auswertung SET aufwaerts = ?, fenster_faelle = ? WHERE symbol = ?",
+            """
+            UPDATE auswertung
+            SET aufwaerts = ?, fenster_faelle = ?, muster = ?, muster_version = ?
+            WHERE symbol = ?
+            """,
             updates,
         )
     return len(updates)
+
+
+def index_an_tagen(pfad: Path, symbol: str, zeiten: Sequence[int]) -> tuple[float | None, ...] | None:
+    if not symbol or not pfad.exists():
+        return None
+    from lernen import _tabelle as kurse_tabelle
+
+    with sqlite3.connect(pfad) as verbindung:
+        kurse_tabelle(verbindung)
+        _reihe, bereinigt = _kursreihe(verbindung, symbol)
+    if not bereinigt or not _reihe:
+        return None
+    nach_tag = {zeit // 86400: wert for zeit, wert in _reihe}
+    return tuple(nach_tag.get(int(zeit) // 86400) if isinstance(zeit, int) and not isinstance(zeit, bool) else None for zeit in zeiten)
+
+
+def _kursreihe(verbindung: sqlite3.Connection, symbol: str) -> tuple[tuple[tuple[int, float], ...], bool]:
+    try:
+        zeilen = verbindung.execute(
+            "SELECT zeit, schluss, bereinigt FROM kurse WHERE symbol = ? ORDER BY zeit",
+            (symbol,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return (), False
+    if not zeilen:
+        return (), False
+    vollstaendig = all(zeile[2] not in (None, 0) for zeile in zeilen)
+    reihe = tuple((int(zeile[0]), float(zeile[2] if vollstaendig else zeile[1])) for zeile in zeilen if zeile[1])
+    return reihe, vollstaendig
+
+
+def _angleichen(aktie: tuple[tuple[int, float], ...], index: tuple[tuple[int, float], ...]) -> tuple[tuple[float, ...], tuple[float | None, ...] | None]:
+    werte = tuple(wert for _zeit, wert in aktie)
+    if not index:
+        return werte, None
+    nach_tag = {zeit // 86400: wert for zeit, wert in index}
+    return werte, tuple(nach_tag.get(zeit // 86400) for zeit, _wert in aktie)
 
 
 def _karte(zeile) -> dict:
@@ -200,16 +258,33 @@ def _karte(zeile) -> dict:
     karte["folge"] = karte["folge"] or ""
     karte["ungewoehnlich"] = karte["ungewoehnlich"] or ""
     karte["markt"] = karte["markt"] or ""
+    bild = _bild(karte.get("muster"))
+    karte["vorschlag"] = str(bild.get("satz") or "")
+    karte["horizonte"] = list(bild.get("horizonte") or [])
+    karte["qualitaet"] = str(bild.get("qualitaet") or "")
     wert = karte.get("aufwaerts")
     karte["aufwaerts"] = None if isinstance(wert, bool) or not isinstance(wert, (int, float)) else float(wert)
-    faelle = karte.get("fenster_faelle")
+    if karte["qualitaet"] not in ("vorsichtig", "belastbarer"):
+        karte["aufwaerts"] = None
+    faelle = bild.get("faelle", karte.get("fenster_faelle"))
     karte["fenster_faelle"] = 0 if isinstance(faelle, bool) or not isinstance(faelle, int) else faelle
+    karte.pop("muster", None)
     karte["datenstatus"] = karte["datenstatus"] or ""
     stempel = karte.get("aktualisiert")
     if isinstance(stempel, int) and not isinstance(stempel, bool):
         text = datetime.fromtimestamp(stempel, BERLIN).strftime("%d.%m. %H:%M")
         karte["herkunft"] = f"{karte['herkunft']} · gespeichert {text}"
     return karte
+
+
+def _bild(text) -> dict:
+    if not isinstance(text, str) or not text:
+        return {}
+    try:
+        bild = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return bild if isinstance(bild, dict) else {}
 
 
 def _zeiten(pfad: Path) -> dict[str, int]:
@@ -253,6 +328,8 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         ("markt", "TEXT"),
         ("aufwaerts", "REAL"),
         ("fenster_faelle", "INTEGER"),
+        ("muster", "TEXT"),
+        ("muster_version", "INTEGER"),
         ("hinweis_stand", "TEXT"),
     ):
         if name not in vorhanden:

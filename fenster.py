@@ -1,6 +1,7 @@
 """Eigenes dunkles Fenster. Die Zeichenfläche von Tk bleibt auf diesem Mac weiß."""
 
 import json
+import sqlite3
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,18 +28,24 @@ from beobachter import (
 from seite import fehler_stand, lade_stand, seite_html, stand_bauen
 
 _CACHE = UNIVERSUM
+_letzte_zeilen: tuple = ()
 _ERKLARUNG = (
     "Zuerst kommen die Namen aus deiner Liste. Danach DAX, MDAX, S&P 500 und Nasdaq 100.\n"
     "Ein Name erscheint nur in zwei Fällen.\n"
-    "1. Dieser Rücksetzer kam bei ihm mindestens 8-mal vor, und drei Handelstage später lag der Kurs im Median höher.\n"
+    "1. Dieselbe Regel, die heute gilt, kam bei ihm in nicht überlappenden Fällen vor. "
+    "Vorsichtig ab 30 Fällen, belastbarer ab 60. Acht Fälle reichen nicht.\n"
     "2. Der heutige Ausschlag ist für ihn selbst selten. Dafür brauche ich mindestens 8 eigene Tage, "
     "und der Tag muss größer sein als an 9 von 10 Tagen.\n"
     "Ein normaler Tag bleibt im Hintergrund, auch wenn er 3 % groß ist.\n"
     "Ohne frische Kurszeit steht dort: noch nicht neu gemessen. Das heißt nicht unwichtig.\n"
     "Die Kurszeit ist der Stand der Börse. Daneben steht, wann ich ihn gespeichert habe.\n"
     "Ist das Fenster zu und der Mac wach, läuft alle 30 Minuten eine Runde.\n"
-    "Nachrichten aus etwa vier Monaten bleiben gespeichert, zusammen mit dem Kurs danach. "
-    "Das ist ein zeitlicher Zusammenhang, keine Ursache. Eine einzelne Meldung wird nicht zur Regel.\n"
+    "Nachrichten aus etwa vier Monaten zählen nur, wenn die Quelle geantwortet hat. "
+    "Ein Fehlschlag oder eine unerreichbare Quelle bleibt offen. "
+    "Der Kurs danach ist ein zeitlicher Zusammenhang, keine Ursache. Eine einzelne Meldung wird nicht zur Regel.\n"
+    "Historische Fälle nutzen nur Kurse, die es an diesem Tag schon gab, und nur splitbereinigte Reihen. "
+    "Handelskosten sind eine Annahme, kein gemessener Betrag. "
+    "Kauf und Halten steht daneben. Die Liste enthält heutige Indexmitglieder, früher entfernte Namen fehlen.\n"
     "Namen ohne diesen Abruf kommen zuerst, bis zu 80 pro Runde.\n"
     "Geht der Vergleichsindex ähnlich, steht das am Namen. "
     "Eine Schlagzeile ohne den Firmennamen wird trotzdem keiner Aktie angehängt.\n"
@@ -104,7 +111,14 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         pfad = self.path.split("?", 1)[0]
         if pfad == "/stand":
-            self._senden(json.dumps(self.bild.lesen(), ensure_ascii=False).encode("utf-8"), "application/json")
+            stand = dict(self.bild.lesen())
+            try:
+                from papier import ansicht
+
+                stand["papier"] = ansicht(DATENBANK)
+            except (OSError, sqlite3.Error):
+                pass
+            self._senden(json.dumps(stand, ensure_ascii=False).encode("utf-8"), "application/json")
             return
         if pfad == "/neu":
             self.neu()
@@ -120,6 +134,9 @@ class _Handler(BaseHTTPRequestHandler):
         if pfad == "/frage":
             self._frage()
             return
+        if pfad == "/papier":
+            self._papier()
+            return
         if pfad != "/liste":
             self._senden(b'{"ok": false}', "application/json", 404)
             return
@@ -133,6 +150,29 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self.neu()
         self._senden(json.dumps({"ok": True, "meldung": meldung}).encode("utf-8"), "application/json")
+
+    def _papier(self) -> None:
+        from papier import PapierFehler, ansicht, schalten
+
+        laenge = int(self.headers.get("Content-Length") or "0")
+        roh = self.rfile.read(min(laenge, 2000)) if laenge else b"{}"
+        try:
+            inhalt = json.loads(roh.decode("utf-8"))
+            schalten(
+                DATENBANK,
+                bool(inhalt.get("automatisch")),
+                str(inhalt.get("bestaetigung") or ""),
+                bool(inhalt.get("notfall")),
+            )
+            bild = ansicht(DATENBANK)
+            stand = dict(self.bild.lesen())
+            stand["papier"] = bild
+            self.bild.setzen(stand)
+            if bild.get("automatisch") or bild.get("notfall"):
+                threading.Thread(target=_papier_lauf, args=(self.bild,), daemon=True).start()
+            self._senden(json.dumps({"ok": True, "papier": bild}, ensure_ascii=False).encode("utf-8"), "application/json")
+        except (PapierFehler, UnicodeDecodeError, json.JSONDecodeError) as fehler:
+            self._senden(json.dumps({"ok": False, "meldung": str(fehler)}).encode("utf-8"), "application/json", 400)
 
     def _frage(self) -> None:
         from gespraech import antwort
@@ -260,6 +300,9 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
                 fertig=len(menge),
                 runde=len(menge),
             )
+            from papier import nach_runde
+
+            nach_runde(DATENBANK, zeilen)
         except Exception as fehler:  # noqa: BLE001
             naechste = 60
             bild.setzen(fehler_stand(str(fehler)))
@@ -290,7 +333,19 @@ def bild_zeilen(
     return tuple(zeilen)
 
 
+def _papier_lauf(bild) -> None:
+    from papier import ansicht, nach_runde
+
+    nach_runde(DATENBANK, _letzte_zeilen)
+    stand = dict(bild.lesen())
+    stand["papier"] = ansicht(DATENBANK)
+    bild.setzen(stand)
+
+
 def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0, fertig: int = 0, runde: int = 0) -> None:
+    global _letzte_zeilen
+    if zeilen:
+        _letzte_zeilen = tuple(zeilen)
     from analyse import einschaetzung_satz
     from auswertung import mit_kurszeit, sichtbar
 
@@ -317,6 +372,12 @@ def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0
         int(lernen.get("offen") or 0),
     )
     stand["erklaerung"] = _ERKLARUNG
+    try:
+        from papier import ansicht
+
+        stand["papier"] = ansicht(DATENBANK)
+    except Exception:  # noqa: BLE001
+        stand["papier"] = {"modus": "Simulation. Kein echtes Geld.", "hinweis": "Paper-Status ist gerade nicht lesbar.", "automatisch": False, "notfall": True, "anleitung": "", "konto": {}, "positionen": [], "orders": [], "lernen": {}, "strategie": ""}
     if karten:
         wort = "Name ist" if len(karten) == 1 else "Namen sind"
         stand["briefing"] = f"{len(karten)} {wort} gerade ungewöhnlich."
@@ -374,12 +435,19 @@ def _archiv_zahlen() -> tuple[int, int]:
 
 
 def _archiv_satz() -> str:
-    da, gesamt = _archiv_zahlen()
-    if not gesamt:
+    from lernen import nachrichten_stand
+    from universum import lade_universum
+
+    universum, _hinweis = lade_universum(lade_liste(LISTE), _CACHE)
+    if not universum:
         return "Die Namensliste ist noch nicht geladen."
-    if da < gesamt:
-        return f"Vier Monate Nachrichten fehlen noch bei {gesamt - da} von {gesamt}."
-    return "Die vier Monate Nachrichten sind für diese Liste gespeichert."
+    stand = nachrichten_stand(DATENBANK, universum)
+    geprueft = stand["gespeichert"] + stand["keine"]
+    return (
+        f"Nachrichten geprüft {geprueft} von {len(universum)}. "
+        f"Gespeichert {stand['gespeichert']}, keine gefunden {stand['keine']}, "
+        f"fehlgeschlagen {stand['fehlgeschlagen']}, noch offen {stand['offen']}."
+    )
 
 
 def _namen(stand: dict) -> dict[str, str]:

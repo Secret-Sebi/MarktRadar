@@ -178,86 +178,66 @@ def _neun_von_zehn(werte: Sequence[float]) -> float:
     return sortiert[index]
 
 
-_VORSCHLAG_FAELLE = 8
-_UNGEFAEHR_TAGE = 60
+_VORSICHTIG = 30
+_BELASTBAR = 60
 
 
-def fenster_chance(zahlen: Kennzahlen | None, schluesse: Sequence[float]) -> tuple[float | None, int]:
-    if not kurzfenster(zahlen):
-        return None, 0
-    faelle = tuple(_drei_tage(schluesse))
-    if len(faelle) < _VORSCHLAG_FAELLE:
-        return None, len(faelle)
-    median = _median(faelle)
-    if median <= 0:
-        return None, len(faelle)
-    return float(median), len(faelle)
+def setup_aus_kennzahlen(zahlen: Kennzahlen | None) -> bool:
+    if zahlen is None or zahlen.anzahl_kurse < 200:
+        return False
+    if zahlen.sma20 is None or zahlen.sma200 is None or zahlen.rsi is None:
+        return False
+    if _im_abwaertstrend(zahlen) or zahlen.rsi >= 68:
+        return False
+    if zahlen.ist_etf:
+        return _etf_ruecksetzer(zahlen, _score(zahlen))
+    return zahlen.preis > zahlen.sma200 and zahlen.preis <= zahlen.sma20 and 30 <= zahlen.rsi <= 55
+
+
+def fenster_chance(
+    zahlen: Kennzahlen | None,
+    schluesse: Sequence[float],
+    index_schluesse: Sequence[float] | None = None,
+    bereinigt: bool = True,
+) -> tuple[float | None, int]:
+    from muster import pruefen
+
+    bild = pruefen(zahlen, schluesse, index_schluesse, bereinigt)
+    return bild["rang"], int(bild["faelle"])
 
 
 def einschaetzung_satz(mit_vorschlag: int, frisch: int, modell: int) -> str:
     return (
-        f"Ein Vorschlag aus den geladenen Kursen gibt es ab {_VORSCHLAG_FAELLE} eigenen Fällen, "
-        "wenn der Median nach 3 Tagen positiv ist. "
+        f"Ein vorsichtiger Vorschlag braucht mindestens {_VORSICHTIG} unabhängige eigene Fälle, "
+        f"ein belastbarerer {_BELASTBAR}. Überlappende Tage zählen nicht mit. "
         f"Das haben {int(mit_vorschlag)} von {int(frisch)} Namen mit frischer Kurszeit. "
-        f"Eine ungefähre Einschätzung trage ich ab {_UNGEFAEHR_TAGE} eigenen ausgewerteten Handelstagen eines Namens. "
-        f"Das Modell hat bisher {int(modell)} Tage über alle Namen gesehen. Daraus wird kein Auftrag."
+        f"Das Modell hat {int(modell)} Tage über alle Namen gesehen. "
+        "Das ist keine statistische Sicherheit und kein Auftrag."
     )
 
 
-def angezeigtes_fenster(zahlen: Kennzahlen | None, schluesse: Sequence[float]) -> tuple[str, str]:
-    basis = kurzfenster(zahlen)
-    if not basis:
+def angezeigtes_fenster(
+    zahlen: Kennzahlen | None,
+    schluesse: Sequence[float],
+    index_schluesse: Sequence[float] | None = None,
+    bereinigt: bool = True,
+) -> tuple[str, str]:
+    from muster import pruefen
+
+    bild = pruefen(zahlen, schluesse, index_schluesse, bereinigt)
+    if not bild["aktiv"]:
         return "", ""
-    faelle = tuple(_drei_tage(schluesse))
-    if len(faelle) < 8:
-        return "", (
-            f"Das Fenster ist im aktuellen Kurs zu sehen, aber nur {len(faelle)}-mal mit einem späteren Kurs belegt. "
-            "Für einen Vorschlag brauche ich mindestens 8 eigene Fälle."
-        )
-    median = _median(faelle)
-    satz = (
-        f"In den geladenen Kursen kam das Fenster {len(faelle)}-mal vor. "
-        f"Der Median nach 3 Handelstagen lag bei {de_zahl(median, 1)} %."
-    )
-    if median <= 0:
-        return "", f"Das Fenster ist im aktuellen Kurs zu sehen. {satz} Das reicht nicht für einen Vorschlag."
-    return basis.replace("Das ist eine Lesart der geladenen Kurse, kein Auftrag.", f"{satz} Das ist kein Auftrag."), satz
-
-
-def _drei_tage(schluesse: Sequence[float]) -> tuple[float, ...]:
-    werte = tuple(float(wert) for wert in schluesse if wert)
-    faelle = []
-    for index in range(199, len(werte) - 3):
-        reihe = werte[: index + 1]
-        preis = reihe[-1]
-        linie20 = sma(reihe, 20)
-        linie200 = sma(reihe, 200)
-        rsi_wert = rsi(reihe, 14)
-        if linie20 is None or linie200 is None or rsi_wert is None or preis == 0:
-            continue
-        if preis > linie200 and preis <= linie20 and 30 <= rsi_wert <= 55:
-            faelle.append((werte[index + 3] / preis - 1.0) * 100.0)
-    return tuple(faelle)
-
-
-def _median(werte: Sequence[float]) -> float:
-    sortiert = sorted(werte)
-    mitte = len(sortiert) // 2
-    if len(sortiert) % 2:
-        return sortiert[mitte]
-    return (sortiert[mitte - 1] + sortiert[mitte]) / 2.0
+    if bild["rang"] is None:
+        return "", str(bild["satz"])
+    return str(bild["satz"]), ""
 
 
 def kurzfenster(zahlen: Kennzahlen | None) -> str:
-    if zahlen is None or zahlen.anzahl_kurse < 50 or zahlen.sma20 is None or zahlen.sma200 is None or zahlen.rsi is None:
+    if not setup_aus_kennzahlen(zahlen):
         return ""
-    if _im_abwaertstrend(zahlen) or zahlen.rsi >= 68:
-        return ""
-    ruecksetzer = zahlen.preis > zahlen.sma200 and zahlen.preis <= zahlen.sma20 and 30 <= zahlen.rsi <= 55
-    if not ruecksetzer and not _etf_ruecksetzer(zahlen, _score(zahlen)):
-        return ""
+    art = "ETF" if zahlen and zahlen.ist_etf else "Aktie"
     return (
-        f"Kurzes Fenster, die nächsten 1–3 Handelstage: Rücksetzer im länger steigenden Kurs. "
+        f"Kurzes Fenster, die nächsten 1–3 Handelstage: Rücksetzer im länger steigenden Kurs, Regel für {art}. "
         f"RSI {de_zahl(zahlen.rsi, 1)}. Das ist eine Lesart der geladenen Kurse, kein Auftrag."
     )
 

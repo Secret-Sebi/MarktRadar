@@ -91,7 +91,7 @@ class GespraechTests(unittest.TestCase):
 
     def test_beste_ist_keine_empfehlung(self):
         text = antwort("zeig die besten", {"karten": (_SAP, _BMW)})
-        self.assertIn("8 eigene", text)
+        self.assertIn("30 unabhängige", text)
         self.assertIn("erfinde keinen", text)
         self.assertNotIn("SAP", text)
 

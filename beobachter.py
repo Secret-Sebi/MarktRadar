@@ -37,12 +37,10 @@ from analyse import (
     Urteil,
     abstand_prozent,
     aktion_bei_datenstatus,
-    angezeigtes_fenster,
     de_prozent,
     de_zahl,
     fehler_urteil,
     fenster,
-    fenster_chance,
     handels_hinweis,
     kennzahlen_aus_schluessen,
     markt_satz,
@@ -147,6 +145,7 @@ class Zeile:
     markt: str = ""
     aufwaerts: float | None = None
     fenster_faelle: int = 0
+    muster: dict | None = None
 
 
 def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
@@ -424,7 +423,12 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
     try:
         index_balken = None if markt is None else getattr(markt, "balken", None)
         befund = aktualisiere(
-            DATENBANK, daten.symbol or symbol, daten.name or symbol, daten.balken, index_balken=index_balken
+            DATENBANK,
+            daten.symbol or symbol,
+            daten.name or symbol,
+            daten.balken,
+            index_balken=index_balken,
+            kurse_bereinigt=bool(daten.hat_bereinigt),
         )
         lern_satz = satz(befund)
         thema = befund.kategorie
@@ -489,9 +493,26 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
     markt_text = ""
     aufwaerts = None
     fenster_faelle = 0
+    muster = None
     if (daten.datenstatus or "ok") == "ok":
-        fenster_text, fenster_grund = angezeigtes_fenster(zahlen, daten.schluesse)
-        aufwaerts, fenster_faelle = fenster_chance(zahlen, daten.schluesse)
+        from auswertung import index_an_tagen
+        from muster import pruefen
+
+        zeiten = tuple(getattr(bar, "zeit", None) for bar in daten.balken)
+        index_reihe = None
+        if len(zeiten) == len(daten.schluesse):
+            try:
+                index_reihe = index_an_tagen(DATENBANK, vergleichsindex(daten.symbol or symbol), zeiten)
+            except (OSError, sqlite3.Error):
+                index_reihe = None
+        muster = pruefen(zahlen, daten.schluesse, index_reihe, bool(getattr(daten, "hat_bereinigt", False)))
+        if not muster["aktiv"]:
+            fenster_text, fenster_grund = "", ""
+        elif muster["rang"] is None:
+            fenster_text, fenster_grund = "", str(muster["satz"])
+        else:
+            fenster_text, fenster_grund = str(muster["satz"]), ""
+        aufwaerts, fenster_faelle = muster["rang"], int(muster["faelle"])
         tag_text, tag_grund = ungewoehnlicher_tag(daten.tag_pct, daten.schluesse)
         pruefung = " ".join(teil for teil in ("" if fenster_text else fenster_grund, "" if tag_text else tag_grund) if teil)
         index_symbol = vergleichsindex(daten.symbol or symbol)
@@ -528,6 +549,7 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         markt=markt_text,
         aufwaerts=aufwaerts,
         fenster_faelle=fenster_faelle,
+        muster=muster,
     )
 
 

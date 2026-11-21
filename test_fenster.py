@@ -39,6 +39,8 @@ class FensterTests(unittest.TestCase):
         self.assertIn(".grund { display: block;", html)
         self.assertIn("Die Kurse kommen.", html)
         self.assertIn("NACH OBEN", html)
+        self.assertIn("KI PAPER TRADING", html)
+        self.assertIn("Simulation. Kein echtes Geld.", html)
         self.assertIn("HEUTE UNGEWÖHNLICH", html)
         self.assertIn("Noch nichts Ungewöhnliches.", html)
         self.assertNotIn("tkinter", html)

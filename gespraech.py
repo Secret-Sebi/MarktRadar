@@ -115,10 +115,10 @@ def _rat(niedrig: str, treffer, stand: dict) -> str:
             if isinstance(karte.get("aufwaerts"), (int, float)) and not isinstance(karte.get("aufwaerts"), bool)
         )
         if not wichtige:
-            return "Gerade hat kein Name 8 eigene Fälle mit positivem Median. Ich erfinde keinen."
+            return "Gerade hat kein Name 30 unabhängige Fälle mit Vorsprung nach Kosten und Index. Ich erfinde keinen."
         geordnet = tuple(sorted(wichtige, key=lambda karte: float(karte["aufwaerts"]), reverse=True))
         namen = ", ".join(_rufname(karte) for karte in geordnet[:5])
-        return f"Nach oben, aus dem Median der eigenen Fälle, kein Auftrag: {namen}. {_vorschlag(geordnet[0])}"
+        return f"Nach oben, gewichtet nach Fällen, Treffer, Index und Streuung, kein Auftrag: {namen}. {_vorschlag(geordnet[0])}"
     if len(treffer) == 1:
         return _vorschlag(treffer[0])
     if not treffer:
