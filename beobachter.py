@@ -10,12 +10,16 @@ Nur Text im Terminal:
 Einmal anzeigen und beenden:
     python3 beobachter.py --einmal
 
+Eine Runde ohne Fenster, wenn der Mac wach ist und das Fenster nicht läuft:
+    python3 beobachter.py --nachholen
+
 Das Fenster spricht nur 127.0.0.1 auf diesem Mac an. Es gibt kein Konto und keinen Broker.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -33,27 +37,31 @@ from analyse import (
     Urteil,
     abstand_prozent,
     aktion_bei_datenstatus,
+    angezeigtes_fenster,
     de_prozent,
     de_zahl,
     fehler_urteil,
     fenster,
     handels_hinweis,
     kennzahlen_aus_schluessen,
+    markt_satz,
     soll_melden,
+    ungewoehnlicher_tag,
     unvollstaendig_urteil,
     urteilen,
 )
 from database import signal_speichern
 from ki import aktion_aus_ki, ki_satz, messe, schaetzung, trainiere
 from kurse import gueltiges_symbol, hole_kurs
-from lernen import aktion_aus_lernen, aktion_aus_verkauf, aktualisiere, satz
+from lernen import aktion_aus_lernen, aktion_aus_verkauf, aktualisiere, folge_satz, satz
 from technik import berechne, vergleichsindex
 
 ORDNER = Path(__file__).resolve().parent
 LISTE = ORDNER / "watchlist.txt"
 ZUSTAND = ORDNER / "zustand.json"
 DATENBANK = ORDNER / "daten" / "markt.sqlite"
-PAUSE_SEKUNDEN = 0.35
+UNIVERSUM = ORDNER / "daten" / "universum.txt"
+FENSTER_PID = ORDNER / "daten" / "fenster.pid"
 _INDEX_NAME = {
     "^GDAXI": "DAX",
     "^GSPC": "S&P 500",
@@ -107,39 +115,6 @@ EXS1.DE
 QDVE.DE
 """
 
-_RANG = (
-    "einstieg_pruefen",
-    "sparplan",
-    "beobachten",
-    "abwarten",
-    "vorsicht",
-    "verkauf_pruefen",
-    "unklar",
-    "unvollstaendig",
-    "fehler",
-)
-_GRUPPE = {
-    "einstieg_pruefen": "PRÜFEN",
-    "sparplan": "EHER SPARPLAN",
-    "beobachten": "KEIN KLARER VORTEIL",
-    "abwarten": "NICHT HINTERHERLAUFEN",
-    "vorsicht": "ABWÄRTSTREND",
-    "verkauf_pruefen": "VERKAUF PRÜFEN",
-    "unklar": "ZU WENIG DATEN",
-    "unvollstaendig": "DATEN UNVOLLSTÄNDIG",
-    "fehler": "NICHT GELADEN",
-}
-_FARBE = {
-    "einstieg_pruefen": "\033[33m",
-    "sparplan": "\033[36m",
-    "beobachten": "\033[37m",
-    "abwarten": "\033[90m",
-    "vorsicht": "\033[31m",
-    "verkauf_pruefen": "\033[31m",
-    "unklar": "\033[90m",
-    "unvollstaendig": "\033[90m",
-    "fehler": "\033[31m",
-}
 _TAGE = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
 
@@ -164,11 +139,18 @@ class Zeile:
     abweichung: float | None = None
     handelsplatz: str = ""
     fundamental: str = "fehlt"
+    fenster: str = ""
+    pruefung: str = ""
+    folge: str = ""
+    ungewoehnlich: str = ""
+    markt: str = ""
 
 
 def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
-    einmal, sekunden, symbole, terminal = lese_argumente(argv)
+    einmal, sekunden, symbole, terminal, still = lese_argumente(argv)
     try:
+        if still:
+            return nachholen(ausgabe)
         if not einmal and not terminal:
             from fenster import oeffne_fenster
 
@@ -177,6 +159,71 @@ def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
     except KeyboardInterrupt:
         ausgabe.write("\nMarktRadar beendet. Es wurde nichts gekauft.\n")
         return 0
+
+
+def nachholen(
+    ausgabe: TextIO,
+    pid_pfad: Path = FENSTER_PID,
+    liste: Path = LISTE,
+    cache: Path = UNIVERSUM,
+    datenbank: Path = DATENBANK,
+    uhr=datetime.now,
+) -> int:
+    if fenster_laeuft(pid_pfad):
+        ausgabe.write("Das Fenster misst schon.\n")
+        return 0
+    from auswertung import merken, mess_runde, sende_hinweise
+    from seite import stand_bauen
+    from universum import lade_universum
+
+    moment = uhr(BERLIN)
+    watchlist = lade_liste(liste)
+    universum, hinweis = lade_universum(watchlist, cache, jetzt=int(moment.timestamp()))
+    menge = mess_runde(datenbank, universum, watchlist, int(moment.timestamp()))
+    if not menge:
+        ausgabe.write(f"{hinweis} In den letzten 6 Stunden ist diese Liste gemessen.\n")
+        return 0
+    ausgabe.write(f"{hinweis} Hole {len(menge)} von {len(universum)}.\n")
+    ausgabe.flush()
+    gemessen, zeilen, _, _ = beobachte(menge, lade_zustand(ZUSTAND), ausgabe, uhr=uhr)
+    if zeilen:
+        karten = stand_bauen(zeilen, gemessen, 0)["karten"]
+        merken(datenbank, karten)
+        sende_hinweise(datenbank, karten, watchlist, macos_hinweis)
+    return 0
+
+
+def fenster_merken(pfad: Path = FENSTER_PID) -> None:
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    pfad.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def fenster_vergessen(pfad: Path = FENSTER_PID) -> None:
+    try:
+        if pfad.exists() and pfad.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            pfad.unlink()
+    except OSError:
+        return
+
+
+def fenster_laeuft(pfad: Path = FENSTER_PID) -> bool:
+    if not pfad.exists():
+        return False
+    try:
+        pid = int(pfad.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def lauf(
@@ -218,9 +265,10 @@ def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinwei
     return moment, zeilen, zustand, naechste
 
 
-def lese_argumente(argv: Sequence[str]) -> tuple[bool, int | None, tuple[str, ...], bool]:
+def lese_argumente(argv: Sequence[str]) -> tuple[bool, int | None, tuple[str, ...], bool, bool]:
     einmal = False
     terminal = False
+    still = False
     sekunden = None
     symbole = []
     args = list(argv[1:])
@@ -231,6 +279,8 @@ def lese_argumente(argv: Sequence[str]) -> tuple[bool, int | None, tuple[str, ..
             einmal = True
         elif arg == "--terminal":
             terminal = True
+        elif arg == "--nachholen":
+            still = True
         elif arg == "--sekunden":
             index += 1
             if index >= len(args):
@@ -240,11 +290,11 @@ def lese_argumente(argv: Sequence[str]) -> tuple[bool, int | None, tuple[str, ..
             except ValueError:
                 raise SystemExit("--sekunden braucht eine ganze Zahl.") from None
         elif arg.startswith("-"):
-            raise SystemExit("Bekannt sind --einmal, --terminal und --sekunden N.")
+            raise SystemExit("Bekannt sind --einmal, --terminal, --nachholen und --sekunden N.")
         else:
             symbole.append(arg.strip().upper())
         index += 1
-    return einmal, sekunden, tuple(symbole), terminal
+    return einmal, sekunden, tuple(symbole), terminal, still
 
 
 def warte_sekunden(moment: datetime, vorgabe: int | None) -> int:
@@ -317,15 +367,21 @@ def zustand_nach_runde(alt: dict, zeilen: Sequence[Zeile], zeit: str):
 
 def sammle(symbole: Sequence[str], bei_zeile=None) -> tuple[Zeile, ...]:
     fx: dict = {}
-    maerkte = _maerkte(symbole, fx)
-    zeilen: tuple[Zeile, ...] = ()
     if not symbole:
-        return zeilen
+        return ()
+    indizes = tuple(dict.fromkeys(index for index in (vergleichsindex(symbol) for symbol in symbole) if index))
+    zeilen: tuple[Zeile, ...] = ()
+    fertige_indizes: dict = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
-        laeuft = {pool.submit(_kurs_oder_fehler, symbol, fx): symbol for symbol in symbole}
+        laeuft = {pool.submit(_kurs_oder_fehler, symbol, fx): ("index", symbol) for symbol in indizes}
+        laeuft.update({pool.submit(_kurs_oder_fehler, symbol, fx): ("wert", symbol) for symbol in symbole})
         for fertig in as_completed(laeuft):
-            symbol = laeuft[fertig]
-            zeilen = zeilen + (bewerte(symbol, maerkte.get(vergleichsindex(symbol)), fx, fertig.result()),)
+            art, symbol = laeuft[fertig]
+            ergebnis = fertig.result()
+            if art == "index":
+                fertige_indizes[symbol] = None if isinstance(ergebnis, Exception) else ergebnis
+                continue
+            zeilen = zeilen + (bewerte(symbol, fertige_indizes.get(vergleichsindex(symbol)), fx, ergebnis),)
             if bei_zeile is not None:
                 bei_zeile(zeilen)
     return zeilen
@@ -336,19 +392,6 @@ def _kurs_oder_fehler(symbol: str, fx: dict):
         return hole_kurs(symbol, fx=fx)
     except (ConnectionError, LookupError, ValueError, json.JSONDecodeError) as fehler:
         return fehler
-
-
-def _maerkte(symbole: Sequence[str], fx: dict | None = None) -> dict:
-    indizes = tuple(dict.fromkeys(index for index in (vergleichsindex(symbol) for symbol in symbole) if index))
-    maerkte = {}
-    for index, symbol in enumerate(indizes):
-        if index:
-            time.sleep(PAUSE_SEKUNDEN)
-        try:
-            maerkte[symbol] = hole_kurs(symbol, fx=fx)
-        except (ConnectionError, LookupError, ValueError, json.JSONDecodeError):
-            maerkte[symbol] = None
-    return maerkte
 
 
 def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeile:
@@ -438,6 +481,20 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         fundamental = hole_fundamental(daten.symbol or symbol, urlopen)
     except (OSError, ValueError):
         fundamental = "fehlt"
+    fenster_text, pruefung = ("", "")
+    tag_text = ""
+    markt_text = ""
+    if (daten.datenstatus or "ok") == "ok":
+        fenster_text, fenster_grund = angezeigtes_fenster(zahlen, daten.schluesse)
+        tag_text, tag_grund = ungewoehnlicher_tag(daten.tag_pct, daten.schluesse)
+        pruefung = " ".join(teil for teil in ("" if fenster_text else fenster_grund, "" if tag_text else tag_grund) if teil)
+        index_symbol = vergleichsindex(daten.symbol or symbol)
+        index_pct = None if markt is None else getattr(markt, "tag_pct", None)
+        markt_text = markt_satz(daten.tag_pct, index_pct, _INDEX_NAME.get(index_symbol, ""))
+    try:
+        folge = folge_satz(DATENBANK, daten.symbol or symbol)
+    except (OSError, sqlite3.Error):
+        folge = "Zu diesem Namen ist noch kein Folgetag ausgewertet."
     return Zeile(
         symbol=daten.symbol or symbol,
         name=daten.name or symbol,
@@ -458,10 +515,15 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         abweichung=daten.abweichung,
         handelsplatz=daten.handelsplatz,
         fundamental=fundamental,
+        fenster=fenster_text,
+        pruefung=pruefung,
+        folge=folge,
+        ungewoehnlich=tag_text,
+        markt=markt_text,
     )
 
 
-def bildschirm(zeilen: Sequence[Zeile], moment: datetime, naechste: int, farbig: bool, weiter: bool = True) -> str:
+def bildschirm(zeilen: Sequence[Zeile], moment: datetime, naechste: int, _farbig: bool, weiter: bool = True) -> str:
     berlin = moment.astimezone(BERLIN)
     kopf = (
         f"MARKTRADAR  {_TAGE[berlin.weekday()]} {berlin:%d.%m.%Y %H:%M} Uhr Berlin\n"
@@ -471,8 +533,7 @@ def bildschirm(zeilen: Sequence[Zeile], moment: datetime, naechste: int, farbig:
         f"{handels_hinweis(moment)}\n"
         "Feiertage prüft das Programm nicht.\n"
     )
-    teile = tuple(text for text in (_abschnitt(aktion, zeilen, farbig) for aktion in _RANG) if text)
-    koerper = "\n".join(teile) if teile else "Die Liste ist leer. Trag Kürzel in watchlist.txt ein.\n"
+    koerper = "\n\n".join(_karte(zeile) for zeile in _sortiert(zeilen)) or "Die Liste ist leer. Trag Kürzel in watchlist.txt ein."
     if weiter:
         fuss = f"\nNächste Runde in {_warte_text(naechste)}. Beenden mit Ctrl+C.\nListe: {LISTE}\nSignale: {DATENBANK}\n"
     else:
@@ -489,31 +550,17 @@ def macos_hinweis(titel: str, text: str) -> bool:
     return ergebnis.returncode == 0
 
 
-def _abschnitt(aktion: str, zeilen: Sequence[Zeile], farbig: bool) -> str:
-    gruppe = tuple(zeile for zeile in _sortiert(zeilen) if zeile.urteil.aktion == aktion)
-    if not gruppe:
-        return ""
-    farbe, reset = (_FARBE.get(aktion, ""), "\033[0m") if farbig else ("", "")
-    bloecke = "\n\n".join(_karte(zeile) for zeile in gruppe)
-    return f"\n{farbe}{ _GRUPPE[aktion] }{reset}\n\n{bloecke}\n"
-
-
 def _karte(zeile: Zeile) -> str:
-    score = "Score —" if zeile.urteil.aktion in ("fehler", "unvollstaendig") else f"Score {zeile.urteil.score}"
+    zeit = "Zeit fehlt"
+    if isinstance(zeile.kurszeit, int) and not isinstance(zeile.kurszeit, bool):
+        zeit = datetime.fromtimestamp(zeile.kurszeit, BERLIN).strftime("%d.%m.%Y %H:%M")
     zeilen = [
         f"{zeile.symbol}  {zeile.name}",
-        f"           {_preis(zeile)}   {_kurs_prozent(zeile.tag_pct)} letzter Handelstag   {score}",
+        f"           {_preis(zeile)}   {_kurs_prozent(zeile.tag_pct)}   {zeile.quelle or 'Quelle fehlt'} · {zeit}",
     ]
-    if zeile.quelle:
-        zeilen.append(f"           {zeile.quelle} · {zeile.kursart or 'Kurs'} · {zeile.datenstatus or 'ok'}")
-    if zeile.lernen:
-        zeilen.append(_umbruch(zeile.lernen, 11))
-    if zeile.kennzahlen is not None and zeile.urteil.aktion != "unvollstaendig":
+    if zeile.kennzahlen is not None:
         zeilen.append("           " + _details(zeile.kennzahlen))
     zeilen.extend(_technikzeilen(zeile.technik))
-    zeilen.append(_umbruch(zeile.urteil.grund, 11))
-    if zeile.urteil.hinweis_broker:
-        zeilen.append(_umbruch(zeile.urteil.hinweis_broker, 11))
     return "\n".join(zeilen)
 
 
@@ -538,8 +585,7 @@ def _preis(zeile: Zeile) -> str:
 
 
 def _sortiert(zeilen: Sequence[Zeile]) -> tuple[Zeile, ...]:
-    rang = {name: index for index, name in enumerate(_RANG)}
-    return tuple(sorted(zeilen, key=lambda zeile: (rang.get(zeile.urteil.aktion, 99), -zeile.urteil.score)))
+    return tuple(sorted(zeilen, key=lambda zeile: (zeile.name or zeile.symbol).lower()))
 
 
 def _umbruch(text: str, einzug: int) -> str:

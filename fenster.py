@@ -8,14 +8,49 @@ from io import StringIO
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from beobachter import LISTE, ZUSTAND, beobachte, haenge_an, lade_liste, lade_zustand
+from beobachter import (
+    DATENBANK,
+    FENSTER_PID,
+    LISTE,
+    UNIVERSUM,
+    ZUSTAND,
+    beobachte,
+    fenster_merken,
+    fenster_vergessen,
+    haenge_an,
+    lade_liste,
+    lade_zustand,
+    macos_hinweis,
+    speichere_zustand,
+    warte_sekunden,
+)
 from seite import fehler_stand, lade_stand, seite_html, stand_bauen
 
+_CACHE = UNIVERSUM
+_ERKLARUNG = (
+    "Zuerst kommen die Namen aus deiner Liste. Danach DAX, MDAX, S&P 500 und Nasdaq 100.\n"
+    "Ein Name erscheint nur in zwei Fällen.\n"
+    "1. Dieser Rücksetzer kam bei ihm mindestens 8-mal vor, und drei Handelstage später lag der Kurs im Median höher.\n"
+    "2. Der heutige Ausschlag ist für ihn selbst selten. Dafür brauche ich mindestens 8 eigene Tage, "
+    "und der Tag muss größer sein als an 9 von 10 Tagen.\n"
+    "Ein normaler Tag bleibt im Hintergrund, auch wenn er 3 % groß ist.\n"
+    "Ohne frische Kurszeit steht dort: noch nicht neu gemessen. Das heißt nicht unwichtig.\n"
+    "Die Kurszeit ist der Stand der Börse. Daneben steht, wann ich ihn gespeichert habe.\n"
+    "Ist das Fenster zu und der Mac wach, läuft alle 30 Minuten eine Runde.\n"
+    "Nachrichten aus etwa vier Monaten bleiben gespeichert, zusammen mit dem Kurs danach. "
+    "Das ist ein zeitlicher Zusammenhang, keine Ursache. Eine einzelne Meldung wird nicht zur Regel.\n"
+    "Namen ohne diesen Abruf kommen zuerst, bis zu 80 pro Runde.\n"
+    "Geht der Vergleichsindex ähnlich, steht das am Namen. "
+    "Eine Schlagzeile ohne den Firmennamen wird trotzdem keiner Aktie angehängt.\n"
+    "Unter 60 ausgewerteten Handelstagen ändert das Modell keinen Vorschlag.\n"
+    "Wird ein Name aus deiner Liste ungewöhnlich, kommt eine Mitteilung auf dem Mac."
+)
 _VIEWER = Path(__file__).resolve().parent / "fenster_app" / "Beobachter.app" / "Contents" / "MacOS" / "Beobachter"
 _QUELLE = Path(__file__).resolve().parent / "fenster_app" / "Beobachter.swift"
 
 
 def oeffne_fenster(sekunden, symbole) -> int:
+    fenster_merken(FENSTER_PID)
     zustand = lade_zustand(ZUSTAND)
     bild = _Bild()
     sofort = threading.Event()
@@ -32,6 +67,7 @@ def oeffne_fenster(sekunden, symbole) -> int:
         fenster = subprocess.Popen([str(_viewer()), adresse])
         return fenster.wait()
     finally:
+        fenster_vergessen(FENSTER_PID)
         zu.set()
         sofort.set()
         server.shutdown()
@@ -107,7 +143,11 @@ class _Handler(BaseHTTPRequestHandler):
             text = str(json.loads(roh.decode("utf-8")).get("text") or "")
         except (UnicodeDecodeError, json.JSONDecodeError):
             text = ""
-        satz = antwort(text, self.bild.lesen())
+        from auswertung import alle
+
+        stand = dict(self.bild.lesen())
+        stand["suche"] = lambda: alle(DATENBANK)
+        satz = antwort(text, stand)
         self._senden(json.dumps({"antwort": satz}, ensure_ascii=False).encode("utf-8"), "application/json")
 
     def log_message(self, fmt, *args):
@@ -125,27 +165,88 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
     from datetime import datetime
 
     from analyse import BERLIN
+    from auswertung import merken, mess_runde, pause_bei_luecke, sende_hinweise
+    from universum import lade_universum
 
     ausgabe = StringIO()
     while not zu.is_set():
-        symbole_jetzt = symbole or lade_liste(LISTE)
+        watchlist = lade_liste(LISTE)
+        luecke = 0
+        if symbole:
+            menge, gesamt, listenhinweis = symbole, len(symbole), ""
+        else:
+            from lernen import ohne_langen_abruf
+
+            universum, listenhinweis = lade_universum(watchlist, _CACHE)
+            menge = mess_runde(DATENBANK, universum, watchlist, int(datetime.now().timestamp()))
+            gesamt = len(universum)
+            luecke = len(ohne_langen_abruf(DATENBANK, universum))
+        if not menge:
+            moment = datetime.now(BERLIN)
+            _zeigen(
+                bild,
+                (),
+                False,
+                _status(0, 0, gesamt, "", f"{listenhinweis} In den letzten 6 Stunden ist diese Liste gemessen."),
+                moment,
+                warte_sekunden(moment, sekunden),
+                gesamt,
+            )
+            if zu.is_set():
+                return
+            sofort.wait(warte_sekunden(moment, sekunden))
+            sofort.clear()
+            continue
         _markiere(bild, True)
-        start = _mit_lernen(dict(bild.lesen()))
-        start["status"] = "Der erste Kurs wird geladen."
-        bild.setzen(start)
+        _zeigen(
+            bild,
+            (),
+            True,
+            _status(0, len(menge), gesamt, "", listenhinweis),
+            datetime.now(BERLIN),
+            gesamt=gesamt,
+        )
 
-        gesamt = len(symbole_jetzt)
+        runde = len(menge)
+        gesamt_jetzt = gesamt
+        hinweis_jetzt = listenhinweis
+        rest = [3]
 
-        def teilweise(zeilen, anzahl=gesamt):
-            stand = _mit_lernen(stand_bauen(zeilen, datetime.now(BERLIN), 0, True))
-            stand["status"] = f"{len(zeilen)} von {anzahl} geladen"
-            bild.setzen(stand)
+        def teilweise(zeilen, anzahl_runde=runde, anzahl_gesamt=gesamt_jetzt, hinweis=hinweis_jetzt, namen=watchlist, budget=rest):
+            karten = stand_bauen(zeilen, datetime.now(BERLIN), 0, True)["karten"]
+            merken(DATENBANK, karten)
+            if budget[0] > 0:
+                budget[0] -= sende_hinweise(DATENBANK, karten, namen, macos_hinweis, budget[0])
+            name = karten[-1]["name"] if karten else ""
+            _zeigen(
+                bild,
+                zeilen,
+                True,
+                _status(len(zeilen), anzahl_runde, anzahl_gesamt, name, hinweis),
+                datetime.now(BERLIN),
+                gesamt=anzahl_gesamt,
+            )
 
         try:
             moment, zeilen, zustand, naechste = beobachte(
-                symbole_jetzt, zustand, ausgabe, sekunden, bei_zeile=teilweise
+                menge, zustand, ausgabe, sekunden, bei_zeile=teilweise
             )
-            bild.setzen(_mit_lernen(stand_bauen(zeilen, moment, naechste)))
+            speichere_zustand(ZUSTAND, zustand)
+            if zeilen:
+                karten = stand_bauen(zeilen, moment, naechste)["karten"]
+                merken(DATENBANK, karten)
+                if rest[0] > 0:
+                    sende_hinweise(DATENBANK, karten, watchlist, macos_hinweis, rest[0])
+            naechste = pause_bei_luecke(naechste, luecke)
+            _zeigen(
+                bild,
+                zeilen,
+                False,
+                _status(len(menge), len(menge), gesamt, "", listenhinweis),
+                moment,
+                naechste,
+                gesamt,
+            )
         except Exception as fehler:  # noqa: BLE001
             naechste = 60
             bild.setzen(fehler_stand(str(fehler)))
@@ -155,6 +256,74 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
         sofort.clear()
 
 
+def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0) -> None:
+    from auswertung import mit_kurszeit, sichtbar
+
+    stand = _mit_lernen(stand_bauen(zeilen, moment, naechste, arbeitet))
+    karten = sichtbar(DATENBANK)
+    frisch = mit_kurszeit(DATENBANK, int(moment.timestamp()))
+    wartend = max(int(gesamt) - frisch, 0)
+    stand["karten"] = karten
+    stand["status"] = status
+    stand["erklaerung"] = _ERKLARUNG
+    if karten:
+        wort = "Name ist" if len(karten) == 1 else "Namen sind"
+        stand["briefing"] = f"{len(karten)} {wort} gerade ungewöhnlich."
+        stand["leer"] = ""
+    elif wartend:
+        stand["briefing"] = "Noch nichts Ungewöhnliches."
+        stand["leer"] = f"Noch nicht neu gemessen: {wartend} von {gesamt}. Das heißt nicht, dass sie unwichtig sind."
+    else:
+        stand["briefing"] = "Noch nichts Ungewöhnliches."
+        stand["leer"] = "Alle gemessenen Namen haben eine frische Kurszeit. Keiner davon ist für sich selbst ungewöhnlich."
+    bild.setzen(stand)
+
+
+def _status(fertig: int, runde: int, gesamt: int, name: str, hinweis: str) -> str:
+    from datetime import datetime
+
+    from analyse import BERLIN
+    from auswertung import mit_kurszeit
+
+    frisch = mit_kurszeit(DATENBANK, int(datetime.now(BERLIN).timestamp()))
+    wartend = max(gesamt - frisch, 0)
+    zeilen = [hinweis] if hinweis else []
+    zeilen.append("Zuerst die Namen aus deiner Liste, danach die übrigen.")
+    if name:
+        zeilen.append(f"Gerade: {name}.")
+    zeilen.append(f"Diese Runde: {fertig} von {runde}.")
+    zeilen.append(f"Mit frischer Kurszeit: {frisch} von {gesamt}.")
+    zeilen.append(f"Noch nicht neu gemessen: {wartend}.")
+    zeilen.append(_archiv_satz())
+    from lernen import fortschritt
+
+    kurz = fortschritt(DATENBANK).get("kurz") or ""
+    if kurz:
+        zeilen.append(kurz)
+    return "\n".join(zeilen)
+
+
+def _archiv_satz() -> str:
+    from lernen import ohne_langen_abruf
+    from universum import lade_universum
+
+    universum, _hinweis = lade_universum(lade_liste(LISTE), _CACHE)
+    if not universum:
+        return "Die Namensliste ist noch nicht geladen."
+    fehlend = len(ohne_langen_abruf(DATENBANK, universum))
+    if fehlend:
+        return f"Vier Monate Nachrichten fehlen noch bei {fehlend} von {len(universum)}."
+    return "Die vier Monate Nachrichten sind für diese Liste gespeichert."
+
+
+def _namen(stand: dict) -> dict[str, str]:
+    return {
+        karte["symbol"]: karte["name"]
+        for karte in stand.get("karten", ())
+        if karte.get("symbol") and karte.get("name")
+    }
+
+
 def _mit_lernen(stand: dict) -> dict:
     from beobachter import DATENBANK
     from lernen import einfluss, fortschritt
@@ -162,7 +331,11 @@ def _mit_lernen(stand: dict) -> dict:
     return {
         **stand,
         "lernen": fortschritt(DATENBANK),
-        "nachrichten": {"tag": einfluss(DATENBANK, 1), "woche": einfluss(DATENBANK, 7)},
+        "nachrichten": {
+            "tag": einfluss(DATENBANK, 1, namen=_namen(stand)),
+            "woche": einfluss(DATENBANK, 7, namen=_namen(stand)),
+            "monate": einfluss(DATENBANK, 120, namen=_namen(stand), grenze=8),
+        },
     }
 
 

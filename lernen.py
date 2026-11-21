@@ -7,6 +7,7 @@ steht erst fest, wenn spätere echte Kurse vorliegen.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -16,7 +17,13 @@ from urllib.parse import quote
 from urllib.request import urlopen
 
 from analyse import BERLIN, de_prozent, de_zahl
+from ki import _EINFLUSS
 from quellen import hole_text
+
+_RUECKBLICK = "16w"
+_NEWS_ART = "news-16w"
+_NEWS_ZAHL = 10
+_GDELT_ZAHL = 75
 
 _THEMEN = (
     ("uebernahme", ("übernahme", "uebernahme", "takeover", "merger")),
@@ -86,6 +93,29 @@ def gegen_index(wert: float | None, index_wert: float | None) -> float | None:
     return wert - index_wert
 
 
+def index_ging_mit(wirkung: float | None, relativ: float | None) -> str:
+    if wirkung is None or relativ is None:
+        return ""
+    index = float(wirkung) - float(relativ)
+    if abs(float(wirkung)) < 1 or abs(index) < 1 or float(wirkung) * index <= 0:
+        return ""
+    if abs(float(relativ)) > abs(float(wirkung)) * 0.5:
+        return ""
+    return "Der Index ging in derselben Zeit mit. Das ist kein einzelnes Firmenereignis."
+
+
+def ohne_langen_abruf(pfad: Path, symbole: tuple[str, ...]) -> tuple[str, ...]:
+    if not symbole:
+        return ()
+    if not pfad.exists():
+        return tuple(symbole)
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeilen = verbindung.execute("SELECT symbol FROM abruf WHERE art = ?", (_NEWS_ART,)).fetchall()
+    bekannt = {str(zeile[0]) for zeile in zeilen}
+    return tuple(symbol for symbol in symbole if symbol not in bekannt)
+
+
 def soll_holen(letzter: int | None, jetzt: int, pause: int = 1800) -> bool:
     if letzter is None:
         return True
@@ -123,23 +153,33 @@ def nachtragen(pfad: Path, symbol: str, balken, index_balken=None) -> int:
     with sqlite3.connect(pfad) as verbindung:
         _tabelle(verbindung)
         zeilen = verbindung.execute(
-            "SELECT id, zeit FROM nachrichten WHERE symbol = ? AND wirkung_5 IS NULL",
+            """
+            SELECT id, zeit, wirkung_1, wirkung_3, wirkung_5, wirkung_20
+            FROM nachrichten
+            WHERE symbol = ? AND (wirkung_1 IS NULL OR wirkung_3 IS NULL OR wirkung_5 IS NULL OR wirkung_20 IS NULL)
+            """,
             (symbol,),
         ).fetchall()
         geaendert = 0
-        for nummer, zeit in zeilen:
-            werte = {abstand: wirkung(balken, int(zeit), abstand) for abstand in (1, 3, 5, 20)}
-            if werte[5] is None:
+        for nummer, zeit, w1, w3, w5, w20 in zeilen:
+            vorhanden = {1: w1, 3: w3, 5: w5, 20: w20}
+            neu = {}
+            for abstand, alt in vorhanden.items():
+                if alt is not None:
+                    continue
+                wert = wirkung(balken, int(zeit), abstand)
+                if wert is not None:
+                    neu[abstand] = wert
+            if not neu:
                 continue
-            index_5 = wirkung(index_balken, int(zeit), 5) if index_balken else None
-            verbindung.execute(
-                """
-                UPDATE nachrichten
-                SET wirkung_1 = ?, wirkung_3 = ?, wirkung_5 = ?, wirkung_20 = ?, rel_5 = ?
-                WHERE id = ?
-                """,
-                (werte[1], werte[3], werte[5], werte[20], gegen_index(werte[5], index_5), nummer),
-            )
+            teile = [f"wirkung_{abstand} = ?" for abstand in (1, 3, 5, 20) if abstand in neu]
+            werte = [neu[abstand] for abstand in (1, 3, 5, 20) if abstand in neu]
+            if 5 in neu:
+                index_5 = wirkung(index_balken, int(zeit), 5) if index_balken else None
+                teile.append("rel_5 = ?")
+                werte.append(gegen_index(neu[5], index_5))
+            werte.append(nummer)
+            verbindung.execute(f"UPDATE nachrichten SET {', '.join(teile)} WHERE id = ?", werte)
             geaendert += 1
     return geaendert
 
@@ -167,6 +207,7 @@ def statistik(pfad: Path, symbol: str) -> Befund:
 
 
 def aktualisiere(pfad: Path, symbol: str, name: str, balken, oeffnen=urlopen, index_balken=None) -> Befund:
+    kurse_merken(pfad, symbol, balken)
     _holen(pfad, symbol, name, oeffnen)
     if pfad.exists():
         nachtragen(pfad, symbol, balken, index_balken)
@@ -198,14 +239,18 @@ def fortschritt(pfad: Path) -> dict:
         offen = _anzahl(verbindung, False)
         namen = _anzahl(verbindung, True, True)
         schwelle = len(_namen_ab(verbindung, _MINDEST, False))
-        from ki import _MINDEST as ki_mindest
-
-        testbar = len(_namen_ab(verbindung, ki_mindest * 2, True))
+        testbar = len(_namen_ab(verbindung, 61, True))
         modell = _modell_faelle(verbindung)
     return _lernstand(abgeschlossen, offen, namen, schwelle, testbar, modell)
 
 
-def einfluss(pfad: Path, tage: int = 7, jetzt: int | None = None, grenze: int = 3) -> dict:
+def einfluss(
+    pfad: Path,
+    tage: int = 7,
+    jetzt: int | None = None,
+    grenze: int = 3,
+    namen: dict[str, str] | None = None,
+) -> dict:
     moment = int(time.time()) if jetzt is None else int(jetzt)
     leer = {"meldungen": [], "offen": [], "hinweis": "In diesem Zeitraum liegt keine zugeordnete Meldung."}
     if not pfad.exists() or tage < 1:
@@ -222,6 +267,16 @@ def einfluss(pfad: Path, tage: int = 7, jetzt: int | None = None, grenze: int = 
             """,
             (anfang,),
         ).fetchall()
+    zuordnung = namen or {}
+    zeilen = tuple(
+        zeile
+        for zeile in zeilen
+        if _passt(
+            Meldung(str(zeile[3]), str(zeile[4]), int(zeile[2]), str(zeile[0]), "unklar"),
+            str(zeile[1]),
+            zuordnung.get(str(zeile[1]), ""),
+        )
+    )
     if not zeilen:
         return leer
     gruppen = _gruppen(zeilen)
@@ -239,6 +294,28 @@ def einfluss(pfad: Path, tage: int = 7, jetzt: int | None = None, grenze: int = 
         "offen": tuple(_sicht(gruppe, False) for gruppe in ohne),
         "hinweis": hinweis,
     }
+
+
+def folge_satz(pfad: Path, symbol: str) -> str:
+    if not pfad.exists():
+        return "Zu diesem Namen ist noch kein Folgetag ausgewertet."
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeilen = verbindung.execute(
+            "SELECT zeit, wirkung_1 FROM nachrichten WHERE symbol = ? AND wirkung_1 IS NOT NULL",
+            (symbol,),
+        ).fetchall()
+    tage: dict[int, float] = {}
+    for zeit, wert in zeilen:
+        tage[int(zeit) // 86400] = float(wert)
+    if len(tage) < 8:
+        return f"Ausgewertete Folgetage zu diesem Namen: {len(tage)}. Für eine Zahl brauche ich mindestens 8."
+    median = sorted(tage.values())
+    mitte = len(median) // 2
+    wert = median[mitte] if len(median) % 2 else (median[mitte - 1] + median[mitte]) / 2.0
+    return (
+        f"Nach {len(tage)} ausgewerteten Tagen lag der nächste Handelstag im Median bei {de_zahl(wert, 1)} %."
+    )
 
 
 def satz(befund: Befund) -> str:
@@ -259,24 +336,59 @@ def satz(befund: Befund) -> str:
     )
 
 
+def nachrichten_adressen(symbol: str, name: str) -> tuple[str, str]:
+    yahoo = (
+        "https://query2.finance.yahoo.com/v1/finance/search?quotesCount=0&newsCount="
+        + str(_NEWS_ZAHL)
+        + "&q="
+        + quote(symbol)
+    )
+    gdelt = (
+        "https://api.gdeltproject.org/api/v2/doc/doc?mode=artlist&format=json&maxrecords="
+        + str(_GDELT_ZAHL)
+        + "&timespan="
+        + _RUECKBLICK
+        + "&query="
+        + quote(name or symbol)
+    )
+    return yahoo, gdelt
+
+
+def kurse_merken(pfad: Path, symbol: str, balken) -> int:
+    rein = str(symbol or "").strip().upper()
+    if not rein:
+        return 0
+    zeilen = []
+    for balken_eintrag in balken or ():
+        zeit = getattr(balken_eintrag, "zeit", None)
+        schluss = getattr(balken_eintrag, "schluss", None)
+        if isinstance(zeit, bool) or not isinstance(zeit, int) or not schluss or float(schluss) <= 0:
+            continue
+        zeilen.append((rein, int(zeit), float(schluss)))
+    if not zeilen:
+        return 0
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        verbindung.executemany(
+            "INSERT OR REPLACE INTO kurse (symbol, zeit, schluss) VALUES (?, ?, ?)",
+            zeilen,
+        )
+    return len(zeilen)
+
+
 def _holen(pfad: Path, symbol: str, name: str, oeffnen, jetzt: int | None = None) -> None:
     moment = int(time.time()) if jetzt is None else jetzt
     if pfad.exists() and not soll_holen(_letzter_abruf(pfad, symbol), moment):
         return
     gesammelt: list[Meldung] = []
-    yahoo = "https://query2.finance.yahoo.com/v1/finance/search?quotesCount=0&newsCount=6&q=" + quote(symbol)
-    gdelt = (
-        "https://api.gdeltproject.org/api/v2/doc/doc?mode=artlist&format=json&maxrecords=8&timespan=7d&query="
-        + quote(name or symbol)
-    )
-    for adresse, leser, nur_passende in ((yahoo, aus_yahoo, False), (gdelt, aus_gdelt, True)):
+    yahoo, gdelt = nachrichten_adressen(symbol, name)
+    for adresse, leser in ((yahoo, aus_yahoo), (gdelt, aus_gdelt)):
         try:
             meldungen = leser(json.loads(hole_text(adresse, oeffnen, "application/json")))
         except (ConnectionError, LookupError, TimeoutError, json.JSONDecodeError, ValueError):
             continue
-        if nur_passende:
-            meldungen = tuple(meldung for meldung in meldungen if _passt(meldung, symbol, name))
-        gesammelt.extend(meldungen)
+        gesammelt.extend(meldung for meldung in meldungen if _passt(meldung, symbol, name))
     if gesammelt:
         speichern(pfad, symbol, tuple(gesammelt))
     _abruf_merken(pfad, symbol, moment)
@@ -284,10 +396,47 @@ def _holen(pfad: Path, symbol: str, name: str, oeffnen, jetzt: int | None = None
 
 def _passt(meldung: Meldung, symbol: str, name: str) -> bool:
     text = meldung.titel.lower()
-    if symbol.lower() in text:
+    if _ist_marktbericht(text):
+        return False
+    kuerzel = symbol.upper().split(".")[0].split("-")[0].lower()
+    if _wort(text, kuerzel):
         return True
-    token = name.split()[0].lower() if name else ""
-    return len(token) > 2 and token in text
+    token = _namenswort(name)
+    return bool(token) and _wort(text, token)
+
+
+def _ist_marktbericht(text: str) -> bool:
+    return any(
+        muster in text
+        for muster in (
+            "stock market today",
+            "markets today",
+            "what to watch",
+            "wall street",
+            "dow, s&p",
+            "countdown to",
+            "stocks fall",
+            "stocks rise",
+            "stocks slip",
+            "stocks drop",
+            "stocks gain",
+            "dollar dips",
+        )
+    )
+
+
+def _namenswort(name: str) -> str:
+    for wort in str(name or "").replace(",", " ").split():
+        rein = wort.strip(".").lower()
+        if len(rein) >= 4 and rein not in ("group", "stock", "euro", "ucits", "corp", "holdings"):
+            return rein
+    return ""
+
+
+def _wort(text: str, wort: str) -> bool:
+    if len(wort) < 3:
+        return False
+    return re.search(rf"\b{re.escape(wort)}\b", text) is not None
 
 
 def _faelle(verbindung: sqlite3.Connection, symbol: str) -> tuple[int, float | None]:
@@ -362,6 +511,16 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         )
         """
     )
+    verbindung.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kurse (
+            symbol TEXT NOT NULL,
+            zeit INTEGER NOT NULL,
+            schluss REAL NOT NULL,
+            PRIMARY KEY (symbol, zeit)
+        )
+        """
+    )
     spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")}
     if "rel_5" not in spalten:
         verbindung.execute("ALTER TABLE nachrichten ADD COLUMN rel_5 REAL")
@@ -405,19 +564,30 @@ def _url_fuer_mehrere_namen(verbindung: sqlite3.Connection) -> None:
     verbindung.execute("DROP TABLE nachrichten_alt")
 
 
+def _kurz(modell: int) -> str:
+    if modell <= 0:
+        return "Ausgewertete Handelstage: 0. Unter 60 ändert das keinen Vorschlag."
+    if modell < _EINFLUSS:
+        return (
+            f"Ausgewertete Handelstage: {modell}. "
+            "Unter 60 bleibt das eine kleine Stichprobe und ändert keinen Vorschlag."
+        )
+    return f"Ausgewertete Handelstage: {modell}. Das bleibt eine Stichprobe und ändert keinen Vorschlag."
+
+
 def _lernstand(abgeschlossen: int, offen: int, namen: int, schwelle: int, testbar: int, modell: int) -> dict:
+    kurz = _kurz(modell)
     if abgeschlossen == 0 and offen == 0:
         text = (
-            "Noch nichts gelernt. Es braucht Meldungen mit Kürzel oder Name in der Überschrift, "
-            "danach 5 spätere Handelstage. Der Mac muss dafür an sein."
+            "Sobald nach einer Meldung der nächste Handelstag da ist, "
+            "lerne ich, ob der Kurs höher schloss. Der Mac muss dafür an sein."
         )
     else:
         text = (
             f"Abgeschlossen sind {abgeschlossen} Fälle bei {namen} Namen, {offen} Meldungen warten noch auf 5 spätere Handelstage. "
-            f"Das Modell hat {modell} Fälle gesehen. "
-            f"{schwelle} Namen haben mindestens {_MINDEST} eigene Fälle, {testbar} Namen haben genug für eine Trefferquote. "
-            "Dafür braucht ein Name 24 abgeschlossene Fälle, 12 davon nur für den Test. "
-            "Unklare Überschriften zählen nicht, und bei geschlossenem Mac kommt nichts dazu."
+            f"{schwelle} Namen haben mindestens {_MINDEST} eigene Fälle, {testbar} Namen haben mehr als 60. "
+            "Ein kurzes Fenster kommt aus den geladenen Kursen. "
+            "Unklare Überschriften liefern nur die Kursbewegung, und bei geschlossenem Mac kommt nichts dazu."
         )
     return {
         "abgeschlossen": abgeschlossen,
@@ -426,7 +596,8 @@ def _lernstand(abgeschlossen: int, offen: int, namen: int, schwelle: int, testba
         "schwelle": schwelle,
         "testbar": testbar,
         "modell": modell,
-        "text": text,
+        "kurz": kurz,
+        "text": f"{kurz} {text}",
     }
 
 
@@ -499,6 +670,7 @@ def _sicht(gruppe: dict, gemessen: bool) -> dict:
                 "symbol": eintrag["symbol"],
                 "bewegung": "Wirkung fehlt" if eintrag["wirkung"] is None else de_prozent(eintrag["wirkung"]),
                 "relativ": "" if eintrag["relativ"] is None else f"{de_prozent(eintrag['relativ'])} zum Index",
+                "markt": index_ging_mit(eintrag["wirkung"], eintrag["relativ"]),
             }
             for eintrag in gruppe["symbole"]
         ),
@@ -510,8 +682,8 @@ def _letzter_abruf(pfad: Path, symbol: str) -> int | None:
     with sqlite3.connect(pfad) as verbindung:
         _tabelle(verbindung)
         zeile = verbindung.execute(
-            "SELECT zeit FROM abruf WHERE symbol = ? AND art = 'news'",
-            (symbol,),
+            "SELECT zeit FROM abruf WHERE symbol = ? AND art = ?",
+            (symbol, _NEWS_ART),
         ).fetchone()
     return None if zeile is None else int(zeile[0])
 
@@ -522,8 +694,8 @@ def _abruf_merken(pfad: Path, symbol: str, zeit: int) -> None:
         _tabelle(verbindung)
         verbindung.execute(
             """
-            INSERT INTO abruf (symbol, art, zeit) VALUES (?, 'news', ?)
+            INSERT INTO abruf (symbol, art, zeit) VALUES (?, ?, ?)
             ON CONFLICT(symbol, art) DO UPDATE SET zeit = excluded.zeit
             """,
-            (symbol, zeit),
+            (symbol, _NEWS_ART, zeit),
         )

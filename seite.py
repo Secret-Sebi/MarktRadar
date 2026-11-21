@@ -87,6 +87,13 @@ def _karte(zeile) -> dict:
         "symbol": zeile.symbol,
         "name": kurzname(zeile),
         "preis": _preis(zeile),
+        "herkunft": _kurzherkunft(zeile),
+        "fenster": "" if getattr(zeile, "datenstatus", "") != "ok" else getattr(zeile, "fenster", "") or "",
+        "pruefung": getattr(zeile, "pruefung", "") or "",
+        "folge": getattr(zeile, "folge", "") or "",
+        "ungewoehnlich": getattr(zeile, "ungewoehnlich", "") or "",
+        "markt": getattr(zeile, "markt", "") or "",
+        "datenstatus": getattr(zeile, "datenstatus", "") or "",
         "wert": zeile.preis,
         "tag": tag,
         "tag_wert": zeile.tag_pct,
@@ -94,10 +101,29 @@ def _karte(zeile) -> dict:
         "titel": zeile.urteil.titel,
         "aktion": zeile.urteil.aktion,
         "grund": zeile.urteil.grund,
-        "extra": _herkunft(zeile, "\n".join(teil for teil in (lage(zeile), einzelheiten(zeile)) if teil)),
+        "extra": _herkunft(
+            zeile,
+            "\n".join(
+                teil
+                for teil in (
+                    lage(zeile),
+                    einzelheiten(zeile),
+                    getattr(zeile, "pruefung", ""),
+                    getattr(zeile, "folge", ""),
+                    getattr(zeile, "markt", ""),
+                )
+                if teil
+            ),
+        ),
         "bereich": bereich(zeile),
+        "kurszeit": _stempel(getattr(zeile, "kurszeit", None)),
         **potenzial(zeile),
     }
+
+
+def _kurzherkunft(zeile) -> str:
+    quelle = getattr(zeile, "quelle", "") or "Quelle fehlt"
+    return f"{quelle} · {_kurszeit(getattr(zeile, 'kurszeit', None))}"
 
 
 def _herkunft(zeile, text: str) -> str:
@@ -122,6 +148,12 @@ def _herkunft(zeile, text: str) -> str:
     if gelernt:
         zeile_text = f"{gelernt}\n{zeile_text}"
     return (text + "\n" + zeile_text).strip() if text else zeile_text
+
+
+def _stempel(wert):
+    if isinstance(wert, bool) or not isinstance(wert, int):
+        return None
+    return wert
 
 
 def _kurszeit(wert) -> str:

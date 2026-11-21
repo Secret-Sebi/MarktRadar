@@ -1,7 +1,8 @@
 """Kleines Modell, das seine Gewichte aus abgeschlossenen Fällen nachzieht.
 
 Eingaben sind nur Kurse, die vor der Meldung lagen. Die Antwort ist,
-ob der Kurs fünf Handelstage danach höher stand.
+ob der nächste Handelstag höher schloss. Liegt der noch nicht vor,
+nimmt es die Bewegung nach fünf Tagen.
 """
 
 from __future__ import annotations
@@ -74,16 +75,28 @@ def trainiere(pfad: Path, symbol: str, balken) -> Modell:
         modell = _lesen(verbindung)
         zeilen = verbindung.execute(
             """
-            SELECT id, zeit, kategorie, wirkung_5 FROM nachrichten
-            WHERE symbol = ? AND wirkung_5 IS NOT NULL AND ki_genutzt = 0 AND kategorie != 'unklar'
+            SELECT id, zeit, kategorie, wirkung_1, wirkung_5 FROM nachrichten
+            WHERE symbol = ? AND ki_genutzt = 0 AND (wirkung_1 IS NOT NULL OR wirkung_5 IS NOT NULL)
+            ORDER BY zeit
             """,
             (symbol,),
         ).fetchall()
-        for nummer, zeit, thema, wirkung_5 in zeilen:
-            eingabe = merkmale(balken, int(zeit), str(thema))
-            if eingabe is None:
+        schon = verbindung.execute(
+            "SELECT zeit FROM nachrichten WHERE symbol = ? AND ki_genutzt = 1",
+            (symbol,),
+        ).fetchall()
+        gesehene_tage = {int(zeit) // 86400 for (zeit,) in schon}
+        for nummer, zeit, thema, wirkung_1, wirkung_5 in zeilen:
+            tag = int(zeit) // 86400
+            if tag in gesehene_tage:
+                verbindung.execute("UPDATE nachrichten SET ki_genutzt = 1 WHERE id = ?", (nummer,))
                 continue
-            modell = schritt(modell, eingabe, 1.0 if float(wirkung_5) > 0 else 0.0)
+            bewegung = wirkung_1 if wirkung_1 is not None else wirkung_5
+            eingabe = merkmale(balken, int(zeit), str(thema))
+            if eingabe is None or bewegung is None:
+                continue
+            modell = schritt(modell, eingabe, 1.0 if float(bewegung) > 0 else 0.0)
+            gesehene_tage.add(tag)
             verbindung.execute("UPDATE nachrichten SET ki_genutzt = 1 WHERE id = ?", (nummer,))
         _schreiben(verbindung, modell)
     return modell
@@ -142,25 +155,22 @@ def aktion_aus_ki(
     daten_ok: bool,
     pruefung: tuple[int, int] | None = None,
 ) -> str:
-    if not daten_ok or chance is None or pruefung is None or pruefung[1] < _EINFLUSS:
-        return aktion
-    if chance <= 0.35 and aktion in ("einstieg_pruefen", "sparplan"):
-        return "abwarten"
+    del modell, chance, daten_ok, pruefung
     return aktion
 
 
 def ki_satz(modell: Modell, chance: float | None, pruefung: tuple[int, int] | None = None) -> str:
-    if pruefung is None or pruefung[1] < _EINFLUSS:
+    del chance, pruefung
+    if modell.beispiele == 0:
         return (
-            f"Das Modell hat {modell.beispiele} Fälle gesehen. "
-            "Die aktuelle Modellzahl ändert die Bewertung nicht. "
-            "Eine Trefferquote aus wenigen späteren Fällen erzeugt kein Prüfen."
+            "Das Modell hat noch keinen Handelstag ausgewertet. "
+            "Es lernt, sobald nach einer Meldung der nächste Handelstag da ist. "
+            "Ein kurzes Fenster kommt aus den geladenen Kursen, nicht aus dieser Zahl."
         )
-    if chance is None:
-        return "Der Test ist groß genug, aber für diesen Zeitpunkt fehlt die Modellzahl. Die Bewertung bleibt unverändert."
     return (
-        f"Im Test an {pruefung[1]} späteren Fällen lag das Modell {pruefung[0]}-mal richtig. "
-        "Diese Quote erzeugt kein Prüfen. Nur eine niedrige aktuelle Modellzahl kann ein Prüfen in Abwarten drehen."
+        f"Das Modell hat {modell.beispiele} Handelstage ausgewertet: ob der nächste Tag höher schloss. "
+        f"Unter {_EINFLUSS} Tagen bleibt das eine kleine Stichprobe. "
+        "Ein kurzes Fenster bleibt eine Lesart der Kurse, kein Auftrag."
     )
 
 

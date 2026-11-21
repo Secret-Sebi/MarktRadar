@@ -18,7 +18,7 @@ class _Zeile:
 
 
 class AnsichtTests(unittest.TestCase):
-    def test_briefing_spricht_die_gruppen_aus(self):
+    def test_briefing_nennt_nur_die_anzahl(self):
         text = briefing(
             (
                 _Zeile("ALV.DE", "Allianz SE", "abwarten"),
@@ -26,17 +26,14 @@ class AnsichtTests(unittest.TestCase):
                 _Zeile("VWCE.DE", "Vanguard FTSE All-World UCITS ETF", "sparplan"),
             )
         )
-        self.assertIn("3 Werte", text)
-        self.assertIn("Einen klaren Einstiegsmoment sehe ich gerade nicht.", text)
-        self.assertIn("Allianz", text)
-        self.assertIn("BMW", text)
-        self.assertIn("VWCE", text)
-        self.assertNotIn("Aktiengesellschaft", text)
+        self.assertIn("3 Werte geladen", text)
+        self.assertNotIn("Prüfen", text)
+        self.assertNotIn("Sparplan", text)
 
-    def test_einstieg_wird_nicht_verneint(self):
+    def test_einstieg_wird_nicht_ausgesprochen(self):
         text = briefing((_Zeile("SAP.DE", "SAP SE", "einstieg_pruefen"),))
-        self.assertIn("Zum Prüfen liegen SAP vorn.", text)
-        self.assertNotIn("sehe ich gerade nicht", text)
+        self.assertEqual(text, "Ein Wert geladen.")
+        self.assertNotIn("Prüfen", text)
 
     def test_leere_liste(self):
         self.assertIn("leer", briefing(()))
@@ -44,7 +41,7 @@ class AnsichtTests(unittest.TestCase):
     def test_kurzname_etf_und_einzelheiten(self):
         zeile = _Zeile("SXR8.DE", "iShares Core S&P 500 UCITS ETF", "sparplan")
         self.assertEqual(kurzname(zeile), "SXR8")
-        self.assertIn("Trade Republic", einzelheiten(zeile))
+        self.assertNotIn("prüfen", einzelheiten(zeile).lower())
 
     def test_potenzial_fehlt_ohne_kurse_und_ist_hoch_beim_pruefen(self):
         offen = _Zeile("BMW.DE", "BMW", "unvollstaendig")

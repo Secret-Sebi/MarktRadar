@@ -5,12 +5,17 @@ from zoneinfo import ZoneInfo
 from analyse import (
     Kennzahlen,
     abstand_prozent,
+    angezeigtes_fenster,
     fenster,
     handels_hinweis,
+    ist_wichtig,
     kennzahlen_aus_schluessen,
+    kurzfenster,
+    markt_satz,
     rsi,
     sma,
     soll_melden,
+    ungewoehnlicher_tag,
     urteilen,
 )
 from beobachter import Zeile, bildschirm, zustand_nach_runde
@@ -37,6 +42,44 @@ def k(**werte):
 
 
 class AnalyseTests(unittest.TestCase):
+    def test_markttag_ist_kein_firmenereignis(self):
+        text = markt_satz(-1.5, -1.2, "S&P 500")
+        self.assertIn("S&P 500", text)
+        self.assertIn("kein einzelnes Firmenereignis", text)
+        self.assertEqual(markt_satz(-8.0, -1.2, "S&P 500"), "")
+        self.assertEqual(markt_satz(-1.5, 1.2, "S&P 500"), "")
+        self.assertEqual(markt_satz(-1.5, -1.2, ""), "")
+    def test_kurzes_fenster_nur_bei_ruecksetzer_im_aufwaertstrend(self):
+        text = kurzfenster(k(preis=95, sma20=100, sma50=110, sma200=90, rsi=42))
+        self.assertIn("1–3 Handelstage", text)
+        self.assertIn("kein Auftrag", text)
+        self.assertEqual(kurzfenster(k(preis=80, sma20=90, sma50=85, sma200=100, rsi=40)), "")
+        self.assertEqual(kurzfenster(k(preis=95, sma20=100, sma200=90, rsi=72)), "")
+        self.assertFalse(ist_wichtig("", 0.4, "ok"))
+        self.assertFalse(ist_wichtig("", -3.2, "ok"))
+        self.assertTrue(ist_wichtig("", -3.2, "ok", ungewoehnlich="selten"))
+        self.assertTrue(ist_wichtig("Kurzes Fenster", 0.1, "ok"))
+        self.assertFalse(ist_wichtig("Kurzes Fenster", 4.0, "veraltet"))
+        self.assertFalse(ist_wichtig("", -4.0, "ok", None, 1_000_000))
+        zahlen = k(preis=95, sma20=100, sma50=110, sma200=90, rsi=42)
+        text_ohne, pruefung = angezeigtes_fenster(zahlen, (100.0,) * 30)
+        self.assertEqual(text_ohne, "")
+        self.assertIn("mindestens 8", pruefung)
+        text_ja, _ = angezeigtes_fenster(zahlen, _fenster_schluesse(4, 8))
+        self.assertIn("kam das Fenster", text_ja)
+        self.assertIn("kein Auftrag", text_ja)
+        text_nein, pruefung_nein = angezeigtes_fenster(zahlen, _fenster_schluesse(10, 8))
+        self.assertEqual(text_nein, "")
+        self.assertIn("reicht nicht", pruefung_nein)
+        selten, normal = ungewoehnlicher_tag(-5, _ruhige_schluesse())
+        self.assertIn("9 von 10", selten)
+        self.assertEqual(normal, "")
+        nichts, zu_wenig = ungewoehnlicher_tag(-5, (100.0, 99.0, 98.0))
+        self.assertEqual(nichts, "")
+        self.assertIn("mindestens 8", zu_wenig)
+        nichts, gewohnt = ungewoehnlicher_tag(3, _unruhige_schluesse())
+        self.assertEqual(nichts, "")
+        self.assertIn("normal", gewohnt)
     def test_sma_nutzt_nur_das_fenster_am_ende(self):
         self.assertEqual(sma((1, 2, 3, 4), 2), 3.5)
         self.assertIsNone(sma((1, 2), 3))
@@ -133,7 +176,8 @@ class ProgrammTests(unittest.TestCase):
         )
         self.assertEqual(spaeter[0].symbol, "SAP.DE")
         text = bildschirm((zeile,), datetime(2026, 11, 14, 14, 0, tzinfo=BERLIN), 900, False)
-        self.assertIn("PRÜFEN", text)
+        self.assertNotIn("PRÜFEN", text)
+        self.assertIn("Quelle fehlt", text)
         self.assertIn("SAP.DE", text)
         self.assertIn("Keine Anlageberatung", text)
 
@@ -198,6 +242,42 @@ class KursTests(unittest.TestCase):
 
     def test_yahoo_fehler(self):
         self.assertIsNone(kurse_aus_antwort({"chart": {"result": None, "error": {"description": "x"}}}))
+
+
+def _ruhige_schluesse():
+    werte = []
+    preis = 100.0
+    for _ in range(30):
+        preis *= 1.002
+        werte.append(preis)
+    werte.append(werte[-1] * 0.95)
+    return tuple(werte)
+
+
+def _unruhige_schluesse():
+    werte = []
+    preis = 100.0
+    for index in range(20):
+        preis *= 1.08 if index % 2 == 0 else 0.92
+        werte.append(preis)
+    werte.append(werte[-1] * 1.03)
+    return tuple(werte)
+
+
+def _fenster_schluesse(dip, rise):
+    werte = []
+    preis = 100.0
+    for _ in range(260):
+        preis += 0.35
+        werte.append(preis)
+    for _ in range(12):
+        for _ in range(dip):
+            preis *= 0.985
+            werte.append(preis)
+        for _ in range(rise):
+            preis *= 1.01
+            werte.append(preis)
+    return tuple(werte)
 
 
 if __name__ == "__main__":

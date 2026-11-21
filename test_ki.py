@@ -47,6 +47,21 @@ class ModellTests(unittest.TestCase):
             zweiter = trainiere(pfad, "SAP.DE", balken)
             self.assertEqual(erster.beispiele, zweiter.beispiele)
             self.assertGreater(erster.beispiele, 0)
+            speichern(
+                pfad,
+                "SAP.DE",
+                aus_yahoo(
+                    {
+                        "news": [
+                            {"title": "Nur eine Notiz", "link": "https://beispiel.test/gleicher-tag", "publisher": "Reuters", "providerPublishTime": 2600},
+                            {"title": "Noch eine Notiz", "link": "https://beispiel.test/gleicher-tag-2", "publisher": "Reuters", "providerPublishTime": 2700},
+                        ]
+                    }
+                ),
+            )
+            nachtragen(pfad, "SAP.DE", balken)
+            dritter = trainiere(pfad, "SAP.DE", balken)
+            self.assertEqual(dritter.beispiele, erster.beispiele)
 
     def test_ungepruefte_wahrscheinlichkeit_aendert_nichts(self):
         positiv = leeres_modell()
@@ -56,17 +71,16 @@ class ModellTests(unittest.TestCase):
         chance = wahrscheinlichkeit(positiv, eingabe)
         self.assertGreater(chance, 0.5)
         self.assertEqual(aktion_aus_ki("beobachten", positiv, chance, True), "beobachten")
-        self.assertIn("späteren Fällen", ki_satz(positiv, chance))
+        self.assertIn("Handelstage ausgewertet", ki_satz(positiv, chance))
 
     def test_trefferquote_erzeugt_kein_pruefen(self):
         eingabe = (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 1.0)
         faelle = tuple((eingabe, 1) for _ in range(24))
         self.assertEqual(trefferquote(faelle), (12, 12))
         self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), 0.9, True, (12, 12)), "beobachten")
-        self.assertEqual(aktion_aus_ki("beobachten", leeres_modell(), 0.9, True, (60, 60)), "beobachten")
-        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), 0.2, True, (40, 60)), "abwarten")
-        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), 0.2, False, (40, 60)), "einstieg_pruefen")
-        self.assertIn("kein Prüfen", ki_satz(leeres_modell(), 0.9, (12, 12)))
+        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), 0.2, True, (40, 60)), "einstieg_pruefen")
+        self.assertEqual(aktion_aus_ki("einstieg_pruefen", leeres_modell(), 0.1, True, (61, 61)), "einstieg_pruefen")
+        self.assertIn("noch keinen Handelstag", ki_satz(leeres_modell(), 0.9, (12, 12)))
 
 
 if __name__ == "__main__":

@@ -70,7 +70,7 @@
     margin: 0 0 12px; color: var(--gruen); font-size: 11px; letter-spacing: .18em; font-weight: 700;
   }
   #brief { margin: 0; font-size: 17px; line-height: 1.45; white-space: pre-wrap; }
-  #status, #markt { font-size: 13px; line-height: 1.4; }
+  #status, #markt, .erklaerung { font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
   #status { margin: 22px 0 0; }
   #markt { margin: 10px 0 0; }
   #karten { overflow: auto; padding-right: 4px; }
@@ -87,7 +87,9 @@
   .karte:hover { border-color: rgba(61, 255, 154, .6); box-shadow: 0 0 24px rgba(61, 255, 154, .18); }
   .zeile, .meta { display: flex; align-items: baseline; gap: 10px; }
   .name { font-size: 16px; font-weight: 700; }
-  .preis { margin-left: auto; font-family: ui-monospace, Menlo, monospace; font-size: 16px; color: var(--gruen); }
+  .preis { margin-left: auto; font-family: ui-monospace, Menlo, monospace; font-size: 16px; color: var(--gruen); text-align: right; }
+  .herkunft { display: block; margin-top: 2px; color: #8fb9a4; font-family: "Helvetica Neue", Helvetica, sans-serif; font-size: 11px; font-weight: 400; }
+  .fenster { margin: 8px 0 0; color: #d7f5e4; font-size: 13px; line-height: 1.4; }
   .meta { margin-top: 4px; font-size: 12px; }
   .chip { margin-left: auto; border-radius: 999px; padding: 2px 8px; border: 1px solid transparent; }
   .grund, .extra { margin: 10px 0 0; line-height: 1.4; font-size: 13px; white-space: pre-wrap; }
@@ -133,7 +135,7 @@
 </header>
 <main>
   <aside>
-    <p class="marke">EINSCHÄTZUNG</p>
+    <p class="marke">STAND</p>
     <p id="brief">Ich hole die Kurse.</p>
     <p id="status">Die Liste steht in der watchlist.txt.</p>
     <div id="treffer"></div>
@@ -215,6 +217,10 @@ function karte(eintrag) {
   const preis = document.createElement("div");
   preis.className = "preis";
   text(preis, eintrag.preis);
+  const herkunft = document.createElement("span");
+  herkunft.className = "herkunft";
+  text(herkunft, eintrag.herkunft || "Quelle fehlt · Zeit fehlt");
+  preis.append(herkunft);
   kopf.append(name, preis);
   const meta = document.createElement("div");
   meta.className = "meta";
@@ -224,18 +230,30 @@ function karte(eintrag) {
   const tag = document.createElement("span");
   tag.className = "tag " + (eintrag.richtung || "");
   text(tag, eintrag.tag);
-  const chip = document.createElement("span");
-  chip.className = "chip " + (eintrag.aktion || "");
-  text(chip, eintrag.titel);
-  meta.append(symbol, tag, chip);
-  const grund = document.createElement("p");
-  grund.className = "grund";
-  text(grund, eintrag.grund);
+  meta.append(symbol, tag);
+  block.append(kopf, meta);
+  if (eintrag.fenster) {
+    const fenster = document.createElement("p");
+    fenster.className = "fenster";
+    text(fenster, eintrag.fenster);
+    block.append(fenster);
+  }
+  if (eintrag.ungewoehnlich) {
+    const tag = document.createElement("p");
+    tag.className = "fenster";
+    text(tag, eintrag.ungewoehnlich);
+    block.append(tag);
+  }
+  if (eintrag.markt) {
+    const marktSatz = document.createElement("p");
+    marktSatz.className = "fenster";
+    text(marktSatz, eintrag.markt);
+    block.append(marktSatz);
+  }
   const extra = document.createElement("p");
   extra.className = "extra";
   text(extra, eintrag.extra);
-  block.append(kopf, meta, grund, extra);
-  if (eintrag.gelernt) block.append(potenzialBlock(eintrag));
+  block.append(extra);
   block.addEventListener("click", function () { block.classList.toggle("offen"); });
   return block;
 }
@@ -290,6 +308,28 @@ function passt(eintrag) {
   return haystack.indexOf(suche) !== -1;
 }
 
+function namenBlock(titel, liste, feld, leer) {
+  const block = document.createElement("section");
+  const kopf = document.createElement("h2");
+  text(kopf, titel);
+  const satz = document.createElement("p");
+  const treffer = liste.filter(function (eintrag) { return eintrag[feld]; });
+  text(satz, treffer.length ? treffer.map(function (eintrag) { return eintrag.name; }).join(", ") : leer);
+  block.append(kopf, satz);
+  return block;
+}
+
+function erklaerungBlock(stand) {
+  const block = document.createElement("section");
+  const kopf = document.createElement("h2");
+  text(kopf, "SO WIRD AUSGEWERTET");
+  const satz = document.createElement("p");
+  satz.className = "erklaerung";
+  text(satz, stand.erklaerung || "Zuerst deine Liste. Ein Name erscheint nur, wenn der Tag für ihn selbst selten ist oder ein geprüftes kurzes Fenster vorliegt.");
+  block.append(kopf, satz);
+  return block;
+}
+
 function zeichnen(stand) {
   standJetzt = stand;
   text(brief, stand.briefing);
@@ -304,7 +344,7 @@ function zeichnen(stand) {
   }));
   const stelle = karten.scrollTop;
   karten.replaceChildren();
-  karten.append(gelerntBlock(stand), nachrichtenBlock(stand));
+  karten.append(gelerntBlock(stand), erklaerungBlock(stand), nachrichtenBlock(stand));
   const alle = stand.karten || [];
   const leiste = filterleiste(alle);
   const kartenliste = alle.filter(passt);
@@ -312,7 +352,7 @@ function zeichnen(stand) {
     const leer = document.createElement("p");
     leer.className = "leer";
     const wartet = stand.arbeitet && !alle.length;
-    text(leer, wartet ? (stand.status || "Die Kurse kommen.") : "Keine Werte für diese Ansicht.");
+    text(leer, stand.leer || (wartet ? "Die Kurse kommen." : "Noch nichts Ungewöhnliches."));
     karten.append(leiste, leer);
     return;
   }
@@ -324,7 +364,12 @@ function zeichnen(stand) {
     if (offen.has(eintrag.symbol)) block.classList.add("offen");
     raster.append(block);
   });
-  karten.append(leiste, raster);
+  karten.append(
+    leiste,
+    namenBlock("KURZE FENSTER", kartenliste, "fenster", "Gerade kein geprüftes kurzes Fenster."),
+    namenBlock("HEUTE UNGEWÖHNLICH", kartenliste, "ungewoehnlich", "Gerade kein Tag, der für den Namen selbst selten ist."),
+    raster
+  );
   karten.scrollTop = stelle;
 }
 
@@ -346,7 +391,7 @@ function nachrichtenBlock(stand) {
   const leiste = document.createElement("div");
   leiste.className = "leiste";
   const span = localStorage.getItem("marktradar-span") || "woche";
-  [["tag", "Tag"], ["woche", "Woche"]].forEach(function (paar) {
+  [["tag", "Tag"], ["woche", "Woche"], ["monate", "4 Monate"]].forEach(function (paar) {
     const knopfSpan = document.createElement("button");
     knopfSpan.type = "button";
     knopfSpan.className = "abt" + (span === paar[0] ? " aktiv" : "");
@@ -381,7 +426,8 @@ function meldungsBlock(eintrag) {
   const betroffen = document.createElement("p");
   betroffen.className = "betroffen";
   const namen = (eintrag.symbole || []).map(function (symbol) {
-    return nameZu(symbol.symbol) + ": " + symbol.bewegung + (symbol.relativ ? " (" + symbol.relativ + ")" : "");
+    const marktSatz = symbol.markt ? " " + symbol.markt : "";
+    return nameZu(symbol.symbol) + ": " + symbol.bewegung + (symbol.relativ ? " (" + symbol.relativ + ")" : "") + marktSatz;
   });
   text(betroffen, namen.join(" · ") || "Kein betroffener Name");
   block.append(titel, meta, betroffen);
@@ -487,7 +533,7 @@ JSON.parse(localStorage.getItem(schluessel) || "[]").forEach(function (eintrag) 
   blase(eintrag.rolle, eintrag.inhalt);
 });
 if (!verlauf.childElementCount) {
-  blase("sie", "Frag mich nach einem Namen, den besten oder einem Verkaufshinweis. Ich antworte nur aus den geladenen Kursen.");
+  blase("sie", "Hey. Ich bin da. Frag mich nach einem Namen, oder sag einfach Hallo.");
 }
 
 document.getElementById("frage").addEventListener("submit", async function (ereignis) {

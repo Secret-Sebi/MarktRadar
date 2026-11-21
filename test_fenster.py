@@ -16,13 +16,16 @@ class FensterTests(unittest.TestCase):
         html = seite_html()
         self.assertIn("#3dff9a", html)
         self.assertIn("function graph", html)
-        self.assertIn("EINSCHÄTZUNG", html)
+        self.assertIn("STAND", html)
+        self.assertNotIn("EINSCHÄTZUNG", html)
         self.assertNotIn("const klein = graph", html)
         self.assertIn("Suchen", html)
         self.assertIn("GELERNT", html)
         self.assertIn("NACHRICHTEN", html)
         self.assertIn(".grund { display: block;", html)
-        self.assertIn("stand.status || \"Die Kurse kommen.\"", html)
+        self.assertIn("Die Kurse kommen.", html)
+        self.assertIn("HEUTE UNGEWÖHNLICH", html)
+        self.assertIn("Noch nichts Ungewöhnliches.", html)
         self.assertNotIn("tkinter", html)
 
     def test_stand_zeigt_namen_kurs_und_wochenende(self):
@@ -33,15 +36,19 @@ class FensterTests(unittest.TestCase):
             "Der Kurs liegt ohne klaren Rücksetzer.",
             "In Trade Republic selbst prüfen.",
         )
-        zeile = Zeile("SAP.DE", "SAP SE", "EUR", 213.45, 0.4, urteil, None)
+        zeile = Zeile(
+            "SAP.DE", "SAP SE", "EUR", 213.45, 0.4, urteil, None, quelle="Yahoo Finance", kurszeit=1_700_000_000
+        )
         stand = stand_bauen((zeile,), datetime(2026, 11, 14, 15, 0, tzinfo=BERLIN), 900)
-        self.assertIn("SAP", stand["briefing"])
+        self.assertIn("geladen", stand["briefing"])
+        self.assertNotIn("Prüfen", stand["briefing"])
         self.assertEqual(stand["pille"], "Wochenende")
         self.assertEqual(stand["karten"][0]["name"], "SAP")
         self.assertEqual(stand["karten"][0]["preis"], "213,45 EUR")
         self.assertEqual(_preis(Zeile("SOL-USD", "Solana", "EUR", 65.81, -2.1, urteil, None)), "65,81 EUR")
         self.assertEqual(stand["karten"][0]["richtung"], "hoch")
-        self.assertIn("Trade Republic", stand["karten"][0]["extra"])
+        self.assertIn("Yahoo Finance", stand["karten"][0]["herkunft"])
+        self.assertNotIn("prüfen", stand["karten"][0]["extra"].lower())
         self.assertEqual(stand["karten"][0]["stufe"], "offen")
         self.assertFalse(stand["karten"][0]["gelernt"])
         self.assertIn("noch nichts gelernt", stand["karten"][0]["text"])

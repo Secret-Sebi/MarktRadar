@@ -4,18 +4,6 @@ from collections.abc import Sequence
 
 from analyse import de_prozent, de_zahl
 
-_SAETZE = (
-    ("einstieg_pruefen", "Zum Prüfen liegen {namen} vorn."),
-    ("sparplan", "Für einen Sparplan sehe ich {namen}."),
-    ("beobachten", "Ohne klaren Vorteil bleiben {namen}."),
-    ("abwarten", "Schon gelaufen, deshalb kein Nachkauf: {namen}."),
-    ("vorsicht", "Im Abwärtstrend liegen {namen}."),
-    ("verkauf_pruefen", "Verkauf prüfen, ohne Auftrag: {namen}."),
-    ("unklar", "Noch unklar sind {namen}."),
-    ("unvollstaendig", "Zu wenig Daten haben {namen}."),
-    ("fehler", "Gerade nicht geladen sind {namen}."),
-)
-
 
 def kurzname(zeile) -> str:
     name = " ".join(str(zeile.name).split())
@@ -33,17 +21,9 @@ def kurzname(zeile) -> str:
 def briefing(zeilen: Sequence) -> str:
     if not zeilen:
         return "Die Liste ist leer. Trag Kürzel in die watchlist.txt ein."
-    gruppen = {}
-    for zeile in zeilen:
-        gruppen.setdefault(zeile.urteil.aktion, []).append(kurzname(zeile))
-    saetze = [f"Ich habe {_menge(len(zeilen))} angeschaut."]
-    if "einstieg_pruefen" not in gruppen:
-        saetze.append("Einen klaren Einstiegsmoment sehe ich gerade nicht.")
-    for aktion, vorlage in _SAETZE:
-        namen = gruppen.get(aktion)
-        if namen:
-            saetze.append(vorlage.format(namen=_aufzaehlung(namen)))
-    return " ".join(saetze)
+    if len(zeilen) == 1:
+        return "Ein Wert geladen."
+    return f"{len(zeilen)} Werte geladen."
 
 
 def potenzial(zeile) -> dict:
@@ -83,7 +63,6 @@ def _potenzial_stufe(aktion: str, score: int):
 
 
 def lage(zeile) -> str:
-    technik = zeile.urteil.titel
     fundamental = getattr(zeile, "fundamental", "") or "fehlt"
     if int(getattr(zeile, "faelle", 0) or 0) <= 0:
         nachrichten = "noch nichts zu dieser Aktie gelernt"
@@ -103,7 +82,6 @@ def lage(zeile) -> str:
         )
     return "\n".join(
         (
-            f"Technik: {technik}",
             f"Fundamental: {fundamental}",
             f"Nachrichten: {nachrichten}",
             f"Markt: {markt}",
@@ -131,23 +109,7 @@ def einzelheiten(zeile) -> str:
         )
         if technik.hinweise:
             zeilen.append("Hinweis: " + ", ".join(technik.hinweise))
-    if zeile.urteil.hinweis_broker:
-        zeilen.append(zeile.urteil.hinweis_broker)
     return "\n".join(zeile for zeile in zeilen if zeile)
-
-
-def _menge(anzahl: int) -> str:
-    if anzahl == 1:
-        return "einen Wert"
-    return f"{anzahl} Werte"
-
-
-def _aufzaehlung(namen: Sequence[str]) -> str:
-    if len(namen) == 1:
-        return namen[0]
-    if len(namen) == 2:
-        return f"{namen[0]} und {namen[1]}"
-    return ", ".join(namen[:-1]) + " und " + namen[-1]
 
 
 def _zahl(wert) -> str:

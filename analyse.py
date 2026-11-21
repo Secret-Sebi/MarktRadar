@@ -6,6 +6,7 @@ Durchschnitte zu einem nachvollziehbaren Hinweis.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -103,6 +104,136 @@ def aktion_bei_datenstatus(aktion: str, datenstatus: str) -> str:
     if aktion in ("einstieg_pruefen", "sparplan"):
         return "unvollstaendig"
     return aktion
+
+
+def ist_wichtig(
+    fenster_text: str,
+    tag_pct: float | None,
+    datenstatus: str,
+    kurszeit: int | None = None,
+    jetzt: int | None = None,
+    ungewoehnlich: str = "",
+) -> bool:
+    if datenstatus != "ok":
+        return False
+    if jetzt is not None:
+        if isinstance(kurszeit, bool) or not isinstance(kurszeit, int):
+            return False
+        if int(jetzt) - int(kurszeit) > 36 * 3600:
+            return False
+    return bool(fenster_text or ungewoehnlich)
+
+
+def markt_satz(tag_pct: float | None, index_pct: float | None, index_name: str) -> str:
+    if not index_name or isinstance(tag_pct, bool) or isinstance(index_pct, bool):
+        return ""
+    if not isinstance(tag_pct, (int, float)) or not isinstance(index_pct, (int, float)):
+        return ""
+    tag = float(tag_pct)
+    index = float(index_pct)
+    if abs(tag) < 1 or abs(index) < 1 or tag * index <= 0 or abs(tag) > abs(index) * 2:
+        return ""
+    richtung = "gefallen" if index < 0 else "gestiegen"
+    return (
+        f"Der {index_name} ist heute um {de_zahl(abs(index), 1)} % {richtung}. "
+        "Dieser Name geht mit dem Markt. Das ist kein einzelnes Firmenereignis."
+    )
+
+
+def ungewoehnlicher_tag(tag_pct: float | None, schluesse: Sequence[float]) -> tuple[str, str]:
+    if tag_pct is None or isinstance(tag_pct, bool) or abs(float(tag_pct)) < 3:
+        return "", ""
+    vorher = _tagesbewegungen(schluesse)[:-1]
+    bewegung = de_zahl(abs(float(tag_pct)), 1)
+    richtung = "gefallen" if float(tag_pct) < 0 else "gestiegen"
+    if len(vorher) < 8:
+        return "", (
+            f"Heute {richtung} um {bewegung} %. "
+            f"Eigene Vergleichstage: {len(vorher)}. Für ungewöhnlich brauche ich mindestens 8."
+        )
+    schwelle = _neun_von_zehn(vorher)
+    if abs(float(tag_pct)) > schwelle:
+        return (
+            f"Heute {richtung} um {bewegung} %. "
+            f"Bei diesem Namen waren 9 von 10 Tagen kleiner als {de_zahl(schwelle, 1)} %."
+        ), ""
+    return "", (
+        f"Heute {richtung} um {bewegung} %. "
+        f"Für diesen Namen ist das normal: 9 von 10 Tagen gehen bis {de_zahl(schwelle, 1)} %. Kein Vorschlag."
+    )
+
+
+def _tagesbewegungen(schluesse: Sequence[float]) -> tuple[float, ...]:
+    werte = tuple(float(wert) for wert in schluesse if wert)
+    return tuple(
+        (werte[index] / werte[index - 1] - 1.0) * 100.0
+        for index in range(1, len(werte))
+        if werte[index - 1]
+    )
+
+
+def _neun_von_zehn(werte: Sequence[float]) -> float:
+    sortiert = sorted(abs(wert) for wert in werte)
+    index = min(len(sortiert) - 1, max(0, math.ceil(0.9 * len(sortiert)) - 1))
+    return sortiert[index]
+
+
+def angezeigtes_fenster(zahlen: Kennzahlen | None, schluesse: Sequence[float]) -> tuple[str, str]:
+    basis = kurzfenster(zahlen)
+    if not basis:
+        return "", ""
+    faelle = tuple(_drei_tage(schluesse))
+    if len(faelle) < 8:
+        return "", (
+            f"Das Fenster ist im aktuellen Kurs zu sehen, aber nur {len(faelle)}-mal mit einem späteren Kurs belegt. "
+            "Für einen Vorschlag brauche ich mindestens 8 eigene Fälle."
+        )
+    median = _median(faelle)
+    satz = (
+        f"In den geladenen Kursen kam das Fenster {len(faelle)}-mal vor. "
+        f"Der Median nach 3 Handelstagen lag bei {de_zahl(median, 1)} %."
+    )
+    if median <= 0:
+        return "", f"Das Fenster ist im aktuellen Kurs zu sehen. {satz} Das reicht nicht für einen Vorschlag."
+    return basis.replace("Das ist eine Lesart der geladenen Kurse, kein Auftrag.", f"{satz} Das ist kein Auftrag."), satz
+
+
+def _drei_tage(schluesse: Sequence[float]) -> tuple[float, ...]:
+    werte = tuple(float(wert) for wert in schluesse if wert)
+    faelle = []
+    for index in range(199, len(werte) - 3):
+        reihe = werte[: index + 1]
+        preis = reihe[-1]
+        linie20 = sma(reihe, 20)
+        linie200 = sma(reihe, 200)
+        rsi_wert = rsi(reihe, 14)
+        if linie20 is None or linie200 is None or rsi_wert is None or preis == 0:
+            continue
+        if preis > linie200 and preis <= linie20 and 30 <= rsi_wert <= 55:
+            faelle.append((werte[index + 3] / preis - 1.0) * 100.0)
+    return tuple(faelle)
+
+
+def _median(werte: Sequence[float]) -> float:
+    sortiert = sorted(werte)
+    mitte = len(sortiert) // 2
+    if len(sortiert) % 2:
+        return sortiert[mitte]
+    return (sortiert[mitte - 1] + sortiert[mitte]) / 2.0
+
+
+def kurzfenster(zahlen: Kennzahlen | None) -> str:
+    if zahlen is None or zahlen.anzahl_kurse < 50 or zahlen.sma20 is None or zahlen.sma200 is None or zahlen.rsi is None:
+        return ""
+    if _im_abwaertstrend(zahlen) or zahlen.rsi >= 68:
+        return ""
+    ruecksetzer = zahlen.preis > zahlen.sma200 and zahlen.preis <= zahlen.sma20 and 30 <= zahlen.rsi <= 55
+    if not ruecksetzer and not _etf_ruecksetzer(zahlen, _score(zahlen)):
+        return ""
+    return (
+        f"Kurzes Fenster, die nächsten 1–3 Handelstage: Rücksetzer im länger steigenden Kurs. "
+        f"RSI {de_zahl(zahlen.rsi, 1)}. Das ist eine Lesart der geladenen Kurse, kein Auftrag."
+    )
 
 
 def urteilen(zahlen: Kennzahlen) -> Urteil:

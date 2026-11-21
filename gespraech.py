@@ -7,9 +7,22 @@ import re
 from analyse import de_zahl
 
 _HILFE = (
-    "Frag mich einfach, zum Beispiel was Solana kostet oder wer gerade vorn liegt. "
-    "Ich sag nur, was wirklich geladen ist, und ich kaufe nichts."
+    "Frag mich einfach, zum Beispiel was Solana kostet. "
+    "Ich sag nur, was wirklich geladen ist, und ich kaufe nichts. Ein Hallo reicht auch."
 )
+_BEKANNT = {
+    "hallo", "hi", "hey", "moin", "servus", "na", "yo", "guten", "gute", "tag", "morgen", "abend", "nacht",
+    "wie", "gehts", "geht", "es", "dir", "euch", "alles", "klar", "soweit", "gut",
+    "danke", "dankeschoen", "dankeschön", "super", "cool", "passt", "prima", "nice",
+    "tschuess", "tschüss", "tschau", "ciao", "bis", "spaeter", "später", "dann",
+    "wer", "bist", "du", "was", "machst", "kannst", "hilfe",
+    "und", "auch", "mal", "eben", "so", "mir", "ja", "nein", "bitte", "ok", "okay", "freut", "mich", "oder",
+    "ein", "einfach", "da", "ich", "bin",
+}
+_PARTIKEL = {
+    "denn", "doch", "aber", "bei", "zusammen", "schönen", "schoenen", "schoen",
+    "wieder", "heute", "heut", "eigentlich", "gerade", "schon", "noch", "wohl", "man", "ihr", "uns",
+}
 
 
 def antwort(frage: str, stand: dict) -> str:
@@ -17,20 +30,20 @@ def antwort(frage: str, stand: dict) -> str:
     if not text:
         return _HILFE
     niedrig = text.lower()
-    if niedrig in ("hallo", "hi", "hey", "guten tag"):
-        return "Hey. Worum geht's? Nenn mir einen Namen von der Liste."
+    treffer = _treffer(niedrig, stand)
+    gespraech = _smalltalk(niedrig)
+    if gespraech and not treffer:
+        return gespraech
+    if any(wort in niedrig for wort in ("verkauf", "kaufen", "prüfen", "pruefen", "einstieg", "beste", "besten", "soll ich", "was soll")):
+        return _rat(niedrig, treffer, stand)
     karten = tuple(stand.get("karten") or ())
-    if not karten:
+    if not karten and not treffer:
         return "Die Kurse sind noch nicht da. Gleich kann ich dir dazu was sagen."
-    treffer = _finde(niedrig, karten)
-    if len(treffer) == 1 and not _ist_liste(niedrig):
-        return _eine(treffer[0], niedrig)
-    if "verkauf" in niedrig:
-        return _verkauf(karten)
-    if any(wort in niedrig for wort in ("schlecht", "unten", "letzte")):
-        return _reihe("Weiter unten sehe ich", karten[-5:])
-    if any(wort in niedrig for wort in ("beste", "besten", "vorn", "oben")):
-        return _reihe("Ganz vorn sehe ich gerade", karten[:5])
+    if len(treffer) == 1:
+        satz = _eine(treffer[0], niedrig)
+        if _begruesst(niedrig):
+            return "Hey. " + satz
+        return satz
     if treffer:
         return _reihe("Dazu passen", treffer[:5])
     if any(wort in niedrig for wort in ("gelernt", "lernen", "nachricht")):
@@ -38,6 +51,37 @@ def antwort(frage: str, stand: dict) -> str:
     if any(wort in niedrig for wort in ("hilfe", "was kannst", "was weißt", "was weisst")):
         return _HILFE
     return "Die habe ich gerade nicht geladen. " + _reihe("Auf der Liste sind zum Beispiel", karten[:5])
+
+
+def _worte(text: str) -> tuple[str, ...]:
+    roh = text.lower().replace("'", "").replace("’", "")
+    return tuple(re.findall(r"[a-zäöüß]+", roh))
+
+
+def _begruesst(text: str) -> bool:
+    return bool(set(_worte(text)) & {"hallo", "hi", "hey", "moin", "servus", "yo", "guten", "gute", "schönen", "schoenen"})
+
+
+def _smalltalk(text: str) -> str | None:
+    worte = _worte(text)
+    if not worte or any(wort not in _BEKANNT and wort not in _PARTIKEL for wort in worte):
+        return None
+    if not any(wort in _BEKANNT for wort in worte):
+        return None
+    menge = set(worte)
+    if menge & {"tschuess", "tschüss", "tschau", "ciao", "bis"}:
+        return "Bis dann. Die Liste bleibt hier, falls du später noch einen Kurs willst."
+    if menge & {"danke", "dankeschoen", "dankeschön"}:
+        return "Gern. Sag einfach Bescheid, wenn du noch einen Namen hören willst."
+    if menge & {"kannst", "hilfe"} or {"wer", "bist"} <= menge or {"was", "machst"} <= menge:
+        return _HILFE
+    if menge & {"gehts", "geht"} or {"alles", "klar"} <= menge or {"alles", "gut"} <= menge:
+        if _begruesst(text):
+            return "Hey, mir geht's gut. Ich schau gerade auf die Kurse. Wonach soll ich gucken?"
+        return "Mir geht's gut. Die Liste ist da. Nenn mir einen Namen, dann sag ich dir Preis, Zeitpunkt und Quelle."
+    if _begruesst(text) or menge & {"na"}:
+        return "Hey. Ich bin da. Frag mich nach einem Namen, dann sag ich dir Preis, Zeitpunkt und Quelle."
+    return "Alles klar. Ich bin da, wenn du einen Namen hast."
 
 
 def _wissen(stand: dict) -> str:
@@ -51,6 +95,66 @@ def _wissen(stand: dict) -> str:
     elif nachrichten.get("hinweis"):
         teile.append(str(nachrichten["hinweis"]))
     return " ".join(teile)
+
+
+def _treffer(niedrig: str, stand: dict) -> tuple:
+    treffer = _finde(niedrig, tuple(stand.get("karten") or ()))
+    if treffer:
+        return treffer
+    suche = stand.get("suche")
+    if suche is None:
+        return ()
+    return _finde(niedrig, tuple(suche()))
+
+
+def _rat(niedrig: str, treffer, stand: dict) -> str:
+    if "beste" in niedrig or "besten" in niedrig:
+        wichtige = tuple(
+            karte for karte in tuple(stand.get("karten") or ()) if karte.get("fenster") or karte.get("ungewoehnlich")
+        )
+        if not wichtige:
+            return "Gerade ist keiner ungewöhnlich genug für einen Vorschlag. Ich erfinde keinen."
+        namen = ", ".join(_rufname(karte) for karte in wichtige[:5])
+        return f"Ungewöhnlich sind gerade {namen}. {_vorschlag(wichtige[0])}"
+    if len(treffer) == 1:
+        return _vorschlag(treffer[0])
+    if not treffer:
+        return "Diesen Namen habe ich noch nicht ausgewertet. Ich erfinde keinen Vorschlag."
+    return "Dazu passen mehrere Namen. Nenn einen davon, dann sage ich, was die Kurse hergeben."
+
+
+def _vorschlag(karte: dict) -> str:
+    name = _rufname(karte)
+    if karte.get("datenstatus") not in ("", "ok", None):
+        return f"Zu {name} sind die Kursdaten nicht verlässlich. Einen Vorschlag erfinde ich nicht."
+    basis = _eine(karte, "")
+    folge = str(karte.get("folge") or "")
+    if karte.get("fenster"):
+        text = f"Vorschlag aus den eigenen Kursen, kein Auftrag: {karte['fenster']} {basis}"
+    elif karte.get("ungewoehnlich"):
+        text = (
+            f"Für {name} ist der Tag ungewöhnlich. Das ist kein Auftrag und kein kurzes Fenster. "
+            f"{karte['ungewoehnlich']} {basis}"
+        )
+    elif karte.get("pruefung"):
+        text = f"{karte['pruefung']} {basis}"
+    else:
+        tag = karte.get("tag_wert")
+        if isinstance(tag, (int, float)) and not isinstance(tag, bool) and abs(tag) >= 3:
+            text = (
+                f"Heute bewegt sich {name} stark. Ob das für diesen Namen ungewöhnlich ist, ist noch nicht geprüft. {basis}"
+            )
+        else:
+            text = (
+                f"Zu {name} sehe ich kein kurzes Fenster und keinen ungewöhnlichen Tag. {basis} "
+                "Gut oder schlecht leite ich daraus nicht ab."
+            )
+    if folge:
+        text = f"{text} {folge}"
+    markt = str(karte.get("markt") or "")
+    if markt:
+        text = f"{text} {markt}"
+    return text
 
 
 def _finde(niedrig: str, karten) -> tuple:
@@ -68,10 +172,6 @@ def _finde(niedrig: str, karten) -> tuple:
         if any(len(wort) > 2 and re.search(rf"\b{re.escape(wort)}\b", niedrig) for wort in name.lower().split()):
             treffer.append(karte)
     return tuple(treffer)
-
-
-def _ist_liste(niedrig: str) -> bool:
-    return any(wort in niedrig for wort in ("beste", "besten", "schlecht", "verkauf", "liste", "alle"))
 
 
 def _eine(karte: dict, frage: str) -> str:
@@ -98,21 +198,10 @@ def _eine(karte: dict, frage: str) -> str:
         satz += " Das ist Krypto, keine Aktie."
     if karte.get("tag"):
         satz += f" Heute: {karte['tag']}."
-    if any(wort in frage for wort in ("warum", "kaufen", "verkauf", "einstieg", "potenzial")):
-        satz += f" Mein Hinweis ist „{karte.get('titel') or 'unklar'}“. Das ist kein Auftrag."
-        if karte.get("text"):
-            satz += " " + str(karte["text"])
-    else:
-        satz += " Das ist der geladene Kurs, nicht der Preis in Trade Republic."
+    if karte.get("herkunft"):
+        satz += " " + str(karte["herkunft"]) + "."
+    satz += " Das ist der geladene Kurs, nicht der Preis in Trade Republic."
     return satz
-
-
-def _verkauf(karten) -> str:
-    liste = tuple(karte for karte in karten if karte.get("aktion") == "verkauf_pruefen")
-    if not liste:
-        return "Einen Verkaufshinweis habe ich gerade nicht. Der kommt erst nach genug eigenen Fällen und bleibt eine Prüfung, kein Auftrag."
-    namen = ", ".join(_rufname(karte) for karte in liste)
-    return f"Bei {namen} würde ich nur prüfen, ob ein Verkauf Sinn hat. Das ist kein Auftrag."
 
 
 def _reihe(anfang: str, karten) -> str:
