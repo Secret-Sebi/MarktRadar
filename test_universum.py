@@ -8,6 +8,8 @@ from pathlib import Path
 
 from analyse import ist_wichtig
 from auswertung import (
+    alle,
+    chancen_nachtragen,
     faellig,
     merken,
     mess_runde,
@@ -135,8 +137,40 @@ class UniversumTests(unittest.TestCase):
                 ),
             )
             menge = mess_runde(pfad, ("AAPL", "MSFT"), ("AAPL",), int(time.time()))
-        self.assertEqual(menge[0], "AAPL")
-        self.assertIn("MSFT", menge)
+            self.assertEqual(menge[0], "AAPL")
+            self.assertIn("MSFT", menge)
+
+    def test_gespeicherte_kurse_liefern_die_chance_einmal(self):
+        from kurse import Bar
+        from lernen import kurse_merken
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            merken(
+                pfad,
+                (
+                    {
+                        "symbol": "AAA",
+                        "name": "Alpha",
+                        "preis": "10 EUR",
+                        "wert": 10,
+                        "tag": "0 %",
+                        "tag_wert": 0,
+                        "richtung": "ohne",
+                        "herkunft": "Yahoo",
+                        "fenster": "",
+                        "datenstatus": "ok",
+                        "bereich": "USA",
+                        "kurszeit": int(time.time()),
+                    },
+                ),
+            )
+            kurse_merken(pfad, "AAA", tuple(Bar(index, None, None, None, 10, 10, None) for index in range(10)))
+            self.assertEqual(chancen_nachtragen(pfad), 1)
+            self.assertEqual(chancen_nachtragen(pfad), 0)
+            karte = next(eintrag for eintrag in alle(pfad) if eintrag["symbol"] == "AAA")
+        self.assertIsNone(karte["aufwaerts"])
+        self.assertEqual(karte["fenster_faelle"], 0)
 
     def test_mitteilung_kommt_einmal(self):
         with tempfile.TemporaryDirectory() as ordner:

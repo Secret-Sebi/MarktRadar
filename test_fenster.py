@@ -12,6 +12,16 @@ from seite import seite_html, stand_bauen
 
 
 class FensterTests(unittest.TestCase):
+    def test_balken_zeigen_ausgewertet_und_fehlend(self):
+        from fenster import bild_zeilen
+
+        zeilen = bild_zeilen(50, 100, 10, 4, 80, 8, 2)
+        self.assertEqual(zeilen[0], {"name": "Frische Kurszeit", "wert": 50, "von": 100})
+        self.assertEqual(zeilen[1], {"name": "Nachrichten, 4 Monate", "wert": 10, "von": 100})
+        self.assertEqual(zeilen[2], {"name": "Meldung mit späterem Kurs", "wert": 8, "von": 10})
+        self.assertEqual(zeilen[3], {"name": "Diese Runde", "wert": 4, "von": 80})
+        self.assertEqual(bild_zeilen(0, 0, 0, 0, 0, 0, 0), ())
+
     def test_seite_ist_dunkel_und_nennt_die_einschaetzung(self):
         html = seite_html()
         self.assertIn("#3dff9a", html)
@@ -21,9 +31,14 @@ class FensterTests(unittest.TestCase):
         self.assertNotIn("const klein = graph", html)
         self.assertIn("Suchen", html)
         self.assertIn("GELERNT", html)
+        self.assertIn('id="balken"', html)
+        self.assertIn("function anteil", html)
+        self.assertIn("läuft", html)
+        self.assertIn("spur laeuft", html)
         self.assertIn("NACHRICHTEN", html)
         self.assertIn(".grund { display: block;", html)
         self.assertIn("Die Kurse kommen.", html)
+        self.assertIn("NACH OBEN", html)
         self.assertIn("HEUTE UNGEWÖHNLICH", html)
         self.assertIn("Noch nichts Ungewöhnliches.", html)
         self.assertNotIn("tkinter", html)

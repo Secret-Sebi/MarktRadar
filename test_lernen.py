@@ -185,6 +185,7 @@ class WirkungTests(unittest.TestCase):
             bild = einfluss(pfad, 120, jetzt, namen={"NVDA": "NVIDIA"})
             titel = [eintrag["titel"] for eintrag in bild["meldungen"]]
             self.assertIn("Nvidia nennt Zahlen", titel)
+            self.assertEqual(bild["meldungen"][0]["symbole"][0]["zahl"], -2.0)
             self.assertNotIn("Nvidia vor langer Zeit", titel)
             self.assertEqual(kurse_merken(pfad, "NVDA", (Bar(jetzt, None, None, None, 10, 10, None),)), 1)
             self.assertEqual(kurse_merken(pfad, "NVDA", (Bar(jetzt, None, None, None, 11, 11, None), Bar(jetzt - 86400, None, None, None, 9, 9, None))), 2)

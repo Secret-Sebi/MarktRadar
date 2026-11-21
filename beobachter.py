@@ -42,6 +42,7 @@ from analyse import (
     de_zahl,
     fehler_urteil,
     fenster,
+    fenster_chance,
     handels_hinweis,
     kennzahlen_aus_schluessen,
     markt_satz,
@@ -144,6 +145,8 @@ class Zeile:
     folge: str = ""
     ungewoehnlich: str = ""
     markt: str = ""
+    aufwaerts: float | None = None
+    fenster_faelle: int = 0
 
 
 def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
@@ -484,8 +487,11 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
     fenster_text, pruefung = ("", "")
     tag_text = ""
     markt_text = ""
+    aufwaerts = None
+    fenster_faelle = 0
     if (daten.datenstatus or "ok") == "ok":
         fenster_text, fenster_grund = angezeigtes_fenster(zahlen, daten.schluesse)
+        aufwaerts, fenster_faelle = fenster_chance(zahlen, daten.schluesse)
         tag_text, tag_grund = ungewoehnlicher_tag(daten.tag_pct, daten.schluesse)
         pruefung = " ".join(teil for teil in ("" if fenster_text else fenster_grund, "" if tag_text else tag_grund) if teil)
         index_symbol = vergleichsindex(daten.symbol or symbol)
@@ -520,6 +526,8 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         folge=folge,
         ungewoehnlich=tag_text,
         markt=markt_text,
+        aufwaerts=aufwaerts,
+        fenster_faelle=fenster_faelle,
     )
 
 

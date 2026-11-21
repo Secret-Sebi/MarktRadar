@@ -669,6 +669,7 @@ def _sicht(gruppe: dict, gemessen: bool) -> dict:
             {
                 "symbol": eintrag["symbol"],
                 "bewegung": "Wirkung fehlt" if eintrag["wirkung"] is None else de_prozent(eintrag["wirkung"]),
+                "zahl": eintrag["wirkung"],
                 "relativ": "" if eintrag["relativ"] is None else f"{de_prozent(eintrag['relativ'])} zum Index",
                 "markt": index_ging_mit(eintrag["wirkung"], eintrag["relativ"]),
             }

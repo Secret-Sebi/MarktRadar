@@ -178,6 +178,32 @@ def _neun_von_zehn(werte: Sequence[float]) -> float:
     return sortiert[index]
 
 
+_VORSCHLAG_FAELLE = 8
+_UNGEFAEHR_TAGE = 60
+
+
+def fenster_chance(zahlen: Kennzahlen | None, schluesse: Sequence[float]) -> tuple[float | None, int]:
+    if not kurzfenster(zahlen):
+        return None, 0
+    faelle = tuple(_drei_tage(schluesse))
+    if len(faelle) < _VORSCHLAG_FAELLE:
+        return None, len(faelle)
+    median = _median(faelle)
+    if median <= 0:
+        return None, len(faelle)
+    return float(median), len(faelle)
+
+
+def einschaetzung_satz(mit_vorschlag: int, frisch: int, modell: int) -> str:
+    return (
+        f"Ein Vorschlag aus den geladenen Kursen gibt es ab {_VORSCHLAG_FAELLE} eigenen Fällen, "
+        "wenn der Median nach 3 Tagen positiv ist. "
+        f"Das haben {int(mit_vorschlag)} von {int(frisch)} Namen mit frischer Kurszeit. "
+        f"Eine ungefähre Einschätzung trage ich ab {_UNGEFAEHR_TAGE} eigenen ausgewerteten Handelstagen eines Namens. "
+        f"Das Modell hat bisher {int(modell)} Tage über alle Namen gesehen. Daraus wird kein Auftrag."
+    )
+
+
 def angezeigtes_fenster(zahlen: Kennzahlen | None, schluesse: Sequence[float]) -> tuple[str, str]:
     basis = kurzfenster(zahlen)
     if not basis:

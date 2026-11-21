@@ -110,12 +110,15 @@ def _treffer(niedrig: str, stand: dict) -> tuple:
 def _rat(niedrig: str, treffer, stand: dict) -> str:
     if "beste" in niedrig or "besten" in niedrig:
         wichtige = tuple(
-            karte for karte in tuple(stand.get("karten") or ()) if karte.get("fenster") or karte.get("ungewoehnlich")
+            karte
+            for karte in tuple(stand.get("karten") or ())
+            if isinstance(karte.get("aufwaerts"), (int, float)) and not isinstance(karte.get("aufwaerts"), bool)
         )
         if not wichtige:
-            return "Gerade ist keiner ungewöhnlich genug für einen Vorschlag. Ich erfinde keinen."
-        namen = ", ".join(_rufname(karte) for karte in wichtige[:5])
-        return f"Ungewöhnlich sind gerade {namen}. {_vorschlag(wichtige[0])}"
+            return "Gerade hat kein Name 8 eigene Fälle mit positivem Median. Ich erfinde keinen."
+        geordnet = tuple(sorted(wichtige, key=lambda karte: float(karte["aufwaerts"]), reverse=True))
+        namen = ", ".join(_rufname(karte) for karte in geordnet[:5])
+        return f"Nach oben, aus dem Median der eigenen Fälle, kein Auftrag: {namen}. {_vorschlag(geordnet[0])}"
     if len(treffer) == 1:
         return _vorschlag(treffer[0])
     if not treffer:

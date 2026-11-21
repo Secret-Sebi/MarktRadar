@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from analyse import BERLIN, de_zahl, handels_hinweis
+from analyse import BERLIN, de_prozent, de_zahl, handels_hinweis
 from analyse import fenster as handelsfenster
 from ansicht import briefing, einzelheiten, kurzname, lage, potenzial
 from beobachter import _kurs_prozent, _preis, _sortiert, _warte_text
@@ -30,6 +30,7 @@ def lade_stand() -> dict:
         "uhr": "",
         "arbeitet": True,
         "karten": [],
+        "bild": [],
         "lernen": {
             "abgeschlossen": 0,
             "offen": 0,
@@ -93,6 +94,9 @@ def _karte(zeile) -> dict:
         "folge": getattr(zeile, "folge", "") or "",
         "ungewoehnlich": getattr(zeile, "ungewoehnlich", "") or "",
         "markt": getattr(zeile, "markt", "") or "",
+        "aufwaerts": _aufwaerts(zeile),
+        "fenster_faelle": _fenster_faelle(zeile),
+        "vorschlag": _vorschlag_text(zeile),
         "datenstatus": getattr(zeile, "datenstatus", "") or "",
         "wert": zeile.preis,
         "tag": tag,
@@ -148,6 +152,30 @@ def _herkunft(zeile, text: str) -> str:
     if gelernt:
         zeile_text = f"{gelernt}\n{zeile_text}"
     return (text + "\n" + zeile_text).strip() if text else zeile_text
+
+
+def _aufwaerts(zeile):
+    wert = getattr(zeile, "aufwaerts", None)
+    if isinstance(wert, bool) or not isinstance(wert, (int, float)):
+        return None
+    return float(wert)
+
+
+def _fenster_faelle(zeile) -> int:
+    wert = getattr(zeile, "fenster_faelle", 0)
+    if isinstance(wert, bool) or not isinstance(wert, int):
+        return 0
+    return wert
+
+
+def _vorschlag_text(zeile) -> str:
+    wert = _aufwaerts(zeile)
+    if wert is None:
+        faelle = _fenster_faelle(zeile)
+        if 0 < faelle < 8:
+            return f"Für einen Vorschlag fehlen noch Fälle: {faelle} von 8."
+        return ""
+    return f"Vorschlag: Median nach 3 Tagen {de_prozent(wert)}. Kein Auftrag."
 
 
 def _stempel(wert):

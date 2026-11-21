@@ -165,11 +165,18 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
     from datetime import datetime
 
     from analyse import BERLIN
-    from auswertung import merken, mess_runde, pause_bei_luecke, sende_hinweise
+    from auswertung import (
+        chancen_nachtragen,
+        merken,
+        mess_runde,
+        pause_bei_luecke,
+        sende_hinweise,
+    )
     from universum import lade_universum
 
     ausgabe = StringIO()
     while not zu.is_set():
+        chancen_nachtragen(DATENBANK)
         watchlist = lade_liste(LISTE)
         luecke = 0
         if symbole:
@@ -205,6 +212,8 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
             _status(0, len(menge), gesamt, "", listenhinweis),
             datetime.now(BERLIN),
             gesamt=gesamt,
+            fertig=0,
+            runde=len(menge),
         )
 
         runde = len(menge)
@@ -225,6 +234,8 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
                 _status(len(zeilen), anzahl_runde, anzahl_gesamt, name, hinweis),
                 datetime.now(BERLIN),
                 gesamt=anzahl_gesamt,
+                fertig=len(zeilen),
+                runde=anzahl_runde,
             )
 
         try:
@@ -246,6 +257,8 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
                 moment,
                 naechste,
                 gesamt,
+                fertig=len(menge),
+                runde=len(menge),
             )
         except Exception as fehler:  # noqa: BLE001
             naechste = 60
@@ -256,15 +269,53 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
         sofort.clear()
 
 
-def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0) -> None:
+def bild_zeilen(
+    frisch: int,
+    gesamt: int,
+    nachrichten_da: int,
+    runde_fertig: int,
+    runde_von: int,
+    abgeschlossen: int,
+    offen: int,
+) -> tuple[dict, ...]:
+    zeilen = []
+    if gesamt > 0:
+        zeilen.append({"name": "Frische Kurszeit", "wert": int(frisch), "von": int(gesamt)})
+        zeilen.append({"name": "Nachrichten, 4 Monate", "wert": int(nachrichten_da), "von": int(gesamt)})
+    faelle = int(abgeschlossen) + int(offen)
+    if faelle > 0:
+        zeilen.append({"name": "Meldung mit späterem Kurs", "wert": int(abgeschlossen), "von": faelle})
+    if runde_von > 0:
+        zeilen.append({"name": "Diese Runde", "wert": int(runde_fertig), "von": int(runde_von)})
+    return tuple(zeilen)
+
+
+def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0, fertig: int = 0, runde: int = 0) -> None:
+    from analyse import einschaetzung_satz
     from auswertung import mit_kurszeit, sichtbar
 
     stand = _mit_lernen(stand_bauen(zeilen, moment, naechste, arbeitet))
     karten = sichtbar(DATENBANK)
     frisch = mit_kurszeit(DATENBANK, int(moment.timestamp()))
     wartend = max(int(gesamt) - frisch, 0)
-    stand["karten"] = karten
+    nachrichten_da, listen_groesse = _archiv_zahlen()
+    lernen = stand.get("lernen") or {}
+    stand["karten"] = tuple(sorted(karten, key=_reihenfolge))
     stand["status"] = status
+    stand["einschaetzung"] = einschaetzung_satz(
+        sum(1 for karte in karten if isinstance(karte.get("aufwaerts"), (int, float)) and not isinstance(karte.get("aufwaerts"), bool)),
+        frisch,
+        int(lernen.get("modell") or 0),
+    )
+    stand["bild"] = bild_zeilen(
+        frisch,
+        int(gesamt) or listen_groesse,
+        nachrichten_da,
+        fertig,
+        runde,
+        int(lernen.get("abgeschlossen") or 0),
+        int(lernen.get("offen") or 0),
+    )
     stand["erklaerung"] = _ERKLARUNG
     if karten:
         wort = "Name ist" if len(karten) == 1 else "Namen sind"
@@ -277,6 +328,14 @@ def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0
         stand["briefing"] = "Noch nichts Ungewöhnliches."
         stand["leer"] = "Alle gemessenen Namen haben eine frische Kurszeit. Keiner davon ist für sich selbst ungewöhnlich."
     bild.setzen(stand)
+
+
+def _reihenfolge(karte) -> tuple:
+    wert = karte.get("aufwaerts")
+    name = str(karte.get("name") or "").lower()
+    if isinstance(wert, bool) or not isinstance(wert, (int, float)):
+        return (1, 0.0, name)
+    return (0, -float(wert), name)
 
 
 def _status(fertig: int, runde: int, gesamt: int, name: str, hinweis: str) -> str:
@@ -303,16 +362,23 @@ def _status(fertig: int, runde: int, gesamt: int, name: str, hinweis: str) -> st
     return "\n".join(zeilen)
 
 
-def _archiv_satz() -> str:
+def _archiv_zahlen() -> tuple[int, int]:
     from lernen import ohne_langen_abruf
     from universum import lade_universum
 
     universum, _hinweis = lade_universum(lade_liste(LISTE), _CACHE)
     if not universum:
-        return "Die Namensliste ist noch nicht geladen."
+        return 0, 0
     fehlend = len(ohne_langen_abruf(DATENBANK, universum))
-    if fehlend:
-        return f"Vier Monate Nachrichten fehlen noch bei {fehlend} von {len(universum)}."
+    return len(universum) - fehlend, len(universum)
+
+
+def _archiv_satz() -> str:
+    da, gesamt = _archiv_zahlen()
+    if not gesamt:
+        return "Die Namensliste ist noch nicht geladen."
+    if da < gesamt:
+        return f"Vier Monate Nachrichten fehlen noch bei {gesamt - da} von {gesamt}."
     return "Die vier Monate Nachrichten sind für diese Liste gespeichert."
 
 

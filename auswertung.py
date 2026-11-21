@@ -26,6 +26,8 @@ _FELDER = (
     "kurszeit",
     "ungewoehnlich",
     "markt",
+    "aufwaerts",
+    "fenster_faelle",
 )
 
 
@@ -156,6 +158,39 @@ def anzahl(pfad: Path) -> int:
     return int(zeile[0] or 0)
 
 
+def chancen_nachtragen(pfad: Path) -> int:
+    if not pfad.exists():
+        return 0
+    from analyse import fenster_chance, kennzahlen_aus_schluessen
+
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        offen = verbindung.execute(
+            "SELECT symbol, bereich FROM auswertung WHERE fenster_faelle IS NULL AND datenstatus = 'ok'"
+        ).fetchall()
+        updates = []
+        for symbol, bereich in offen:
+            try:
+                reihe = verbindung.execute(
+                    "SELECT schluss FROM kurse WHERE symbol = ? ORDER BY zeit",
+                    (symbol,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                reihe = []
+            schluesse = tuple(float(zeile[0]) for zeile in reihe if zeile[0])
+            if len(schluesse) < 50:
+                updates.append((None, 0, str(symbol)))
+                continue
+            zahlen = kennzahlen_aus_schluessen(schluesse, str(bereich or "") == "ETFs", None)
+            chance, faelle = fenster_chance(zahlen, schluesse)
+            updates.append((chance, faelle, str(symbol)))
+        verbindung.executemany(
+            "UPDATE auswertung SET aufwaerts = ?, fenster_faelle = ? WHERE symbol = ?",
+            updates,
+        )
+    return len(updates)
+
+
 def _karte(zeile) -> dict:
     karte = dict(zip((*_FELDER, "aktualisiert"), zeile))
     if karte["pruefung"] is None:
@@ -165,6 +200,10 @@ def _karte(zeile) -> dict:
     karte["folge"] = karte["folge"] or ""
     karte["ungewoehnlich"] = karte["ungewoehnlich"] or ""
     karte["markt"] = karte["markt"] or ""
+    wert = karte.get("aufwaerts")
+    karte["aufwaerts"] = None if isinstance(wert, bool) or not isinstance(wert, (int, float)) else float(wert)
+    faelle = karte.get("fenster_faelle")
+    karte["fenster_faelle"] = 0 if isinstance(faelle, bool) or not isinstance(faelle, int) else faelle
     karte["datenstatus"] = karte["datenstatus"] or ""
     stempel = karte.get("aktualisiert")
     if isinstance(stempel, int) and not isinstance(stempel, bool):
@@ -212,6 +251,8 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         ("kurszeit", "INTEGER"),
         ("ungewoehnlich", "TEXT"),
         ("markt", "TEXT"),
+        ("aufwaerts", "REAL"),
+        ("fenster_faelle", "INTEGER"),
         ("hinweis_stand", "TEXT"),
     ):
         if name not in vorhanden:

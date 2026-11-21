@@ -6,7 +6,9 @@ from analyse import (
     Kennzahlen,
     abstand_prozent,
     angezeigtes_fenster,
+    einschaetzung_satz,
     fenster,
+    fenster_chance,
     handels_hinweis,
     ist_wichtig,
     kennzahlen_aus_schluessen,
@@ -80,6 +82,15 @@ class AnalyseTests(unittest.TestCase):
         nichts, gewohnt = ungewoehnlicher_tag(3, _unruhige_schluesse())
         self.assertEqual(nichts, "")
         self.assertIn("normal", gewohnt)
+        chance, anzahl = fenster_chance(zahlen, _fenster_schluesse(4, 8))
+        self.assertIsNotNone(chance)
+        self.assertGreater(chance, 0)
+        self.assertGreaterEqual(anzahl, 8)
+        self.assertEqual(fenster_chance(zahlen, (100.0,) * 30), (None, 0))
+        hinweis = einschaetzung_satz(2, 10, 40)
+        self.assertIn("ab 8", hinweis)
+        self.assertIn("60", hinweis)
+        self.assertIn("kein Auftrag", hinweis)
     def test_sma_nutzt_nur_das_fenster_am_ende(self):
         self.assertEqual(sma((1, 2, 3, 4), 2), 3.5)
         self.assertIsNone(sma((1, 2), 3))
