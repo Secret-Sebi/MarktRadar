@@ -81,6 +81,11 @@
   #karten { overflow: visible; }
   #papier-brett { display: none; }
   body.alpaka #papier-brett { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  #papier-brett .breit { grid-column: 1 / -1; }
+  #papier-brett button.breit { font: inherit; color: #e7fff4; background: #12362a; border: 1px solid #2f6d56; border-radius: 999px; padding: 8px 14px; cursor: pointer; justify-self: start; }
+  .kontozeile { margin: 0; padding: 8px 0; border-bottom: 1px solid rgba(61, 255, 154, .16); font-size: 16px; }
+  .kontozeile.plus { color: #3dff9a; }
+  .kontozeile.minus { color: #ff6b6b; }
   body.alpaka #karten { display: none; }
   .buch { padding: 16px; border-radius: 18px; border: 1px solid rgba(61, 255, 154, .28); background: rgba(6, 22, 16, .86); }
   .buch h2 { margin-bottom: 4px; }
@@ -537,6 +542,8 @@ function erklaerungBlock(stand) {
   return block;
 }
 
+let alleKonten = false;
+
 function papierZeichnen(papier) {
   papier = papier || {};
   const schalter = document.getElementById("papier-an");
@@ -544,9 +551,38 @@ function papierZeichnen(papier) {
   text(schalter, papier.automatisch ? "Paper-Handel ausschalten" : "Paper-Handel einschalten");
   const brett = document.getElementById("papier-brett");
   brett.replaceChildren();
-  (papier.konten || []).forEach(function (konto) {
-    brett.append(kontoKarte(konto));
+  const alpaca = papier.alpaca || {};
+  const hinweis = document.createElement("p");
+  hinweis.className = "regel breit";
+  text(hinweis, alpaca.verbunden ? "Alpaca Paper ist verbunden. Die großen Karten sind die eigene Simulation." : "Eigene Simulation mit gespieltem Geld. Alpaca ist nicht verbunden.");
+  brett.append(hinweis);
+  if (alpaca.verbunden) brett.append(kontoKarte(alpaca));
+  const titel = document.createElement("h2");
+  titel.className = "breit";
+  text(titel, "Die drei mit dem meisten Plus");
+  brett.append(titel);
+  const beste = papier.beste && papier.beste.length ? papier.beste : (papier.konten || []).slice(0, 3);
+  beste.forEach(function (konto) { brett.append(kontoKarte(konto)); });
+  const knopf = document.createElement("button");
+  knopf.type = "button";
+  knopf.className = "breit";
+  text(knopf, alleKonten ? "Nur die drei" : "Alle Konten");
+  knopf.addEventListener("click", function () {
+    alleKonten = !alleKonten;
+    papierZeichnen(papier);
   });
+  brett.append(knopf);
+  if (alleKonten) {
+    const liste = document.createElement("div");
+    liste.className = "breit";
+    (papier.konten || []).forEach(function (konto) {
+      const zeile = document.createElement("p");
+      zeile.className = "kontozeile " + (konto.klasse || "null");
+      text(zeile, konto.name + " · " + ergebnisWort(konto.klasse, konto.differenz));
+      liste.append(zeile);
+    });
+    brett.append(liste);
+  }
 }
 
 function euroWort(wert) {
@@ -564,7 +600,7 @@ function kontoKarte(konto) {
   const karte = document.createElement("article");
   karte.className = "buch";
   const name = document.createElement("h2");
-  text(name, konto.name);
+  text(name, konto.name + (konto.herkunft ? " · " + konto.herkunft : ""));
   const gesamt = document.createElement("p");
   gesamt.className = "standzahl";
   text(gesamt, euroWort(konto.equity));
@@ -598,9 +634,15 @@ function kontoKarte(konto) {
     text(ergebnisKauf, ergebnisWort(eintrag.klasse, eintrag.differenz));
     const kurs = document.createElement("p");
     kurs.className = "kurs";
-    text(kurs, "Einkauf " + euroWort(eintrag.einstieg));
+    text(kurs, "Einkauf " + euroWort(eintrag.einstieg) + (eintrag.schutz ? ". " + eintrag.schutz : "") + (eintrag.stop ? ". Stop " + eintrag.stop : ""));
     block.append(titel, ergebnisKauf, kurs);
     karte.append(block);
+  });
+  (konto.orders || []).slice(0, 6).forEach(function (eintrag) {
+    const order = document.createElement("p");
+    order.className = "nicht";
+    text(order, eintrag.seite + " " + eintrag.symbol + " " + eintrag.menge + " · " + eintrag.status);
+    karte.append(order);
   });
   (konto.nicht || []).forEach(function (eintrag) {
     const zeile = document.createElement("p");
@@ -618,7 +660,7 @@ async function papierSenden(inhalt) {
   stopp.disabled = true;
   text(document.getElementById("papier-modus"), "Simulation. Kein echtes Geld. Schaltet …");
   try {
-    const antwort = await fetch("/papier", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(inhalt) });
+    const antwort = await fetch("/papier", { method: "POST", headers: { "Content-Type": "application/json", "X-MarktRadar": "1" }, body: JSON.stringify(inhalt) });
     const daten = await antwort.json();
     if (!standJetzt) standJetzt = {};
     if (daten.papier) {

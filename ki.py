@@ -182,6 +182,17 @@ def setze_modell(pfad: Path, modell: Modell) -> None:
         _schreiben(verbindung, modell)
 
 
+def lerne_merkmale(pfad: Path, eingabe: tuple[float, ...], ziel: float) -> Modell | None:
+    if not eingabe:
+        return None
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(pfad) as verbindung:
+        _tabellen(verbindung)
+        modell = schritt(_lesen(verbindung), eingabe, ziel)
+        _schreiben(verbindung, modell)
+    return modell
+
+
 def lerne_ausgang(pfad: Path, balken, thema: str, zeitpunkt: int, ziel: float) -> Modell | None:
     eingabe = merkmale(balken, zeitpunkt, thema)
     if eingabe is None:

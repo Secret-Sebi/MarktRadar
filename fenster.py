@@ -28,6 +28,15 @@ from beobachter import (
 from seite import fehler_stand, lade_stand, seite_html, stand_bauen
 
 _CACHE = UNIVERSUM
+
+
+def anfrage_erlaubt(headers) -> bool:
+    herkunft = headers.get("Origin") or ""
+    if herkunft and not herkunft.startswith(("http://127.0.0.1:", "http://localhost:")):
+        return False
+    if (headers.get("Sec-Fetch-Site") or "").lower() == "cross-site":
+        return False
+    return headers.get("X-MarktRadar") == "1"
 _letzte_zeilen: tuple = ()
 _ERKLARUNG = (
     "Zuerst kommen die Namen aus deiner Liste. Danach DAX, MDAX, S&P 500 und Nasdaq 100.\n"
@@ -154,6 +163,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _papier(self) -> None:
         from papier import PapierFehler, ansicht, schalten
 
+        if not anfrage_erlaubt(self.headers):
+            self._senden(json.dumps({"ok": False, "meldung": "Diese Anfrage kommt nicht aus dem Fenster."}).encode("utf-8"), "application/json", 403)
+            return
         laenge = int(self.headers.get("Content-Length") or "0")
         roh = self.rfile.read(min(laenge, 2000)) if laenge else b"{}"
         try:
