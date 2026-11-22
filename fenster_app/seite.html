@@ -80,7 +80,7 @@
   #flaeche { min-width: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding-right: 4px; }
   #karten { overflow: visible; }
   #papier-brett { display: none; }
-  body.alpaka #papier-brett { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  body.alpaka #papier-brett { display: flex; flex-direction: column; gap: 14px; }
   #papier-brett .breit { grid-column: 1 / -1; }
   #papier-brett button.breit { font: inherit; color: #e7fff4; background: #12362a; border: 1px solid #2f6d56; border-radius: 999px; padding: 8px 14px; cursor: pointer; justify-self: start; }
   .kontozeile { margin: 0; padding: 8px 0; border-bottom: 1px solid rgba(61, 255, 154, .16); font-size: 16px; }
@@ -93,6 +93,26 @@
   table.ki th, table.ki td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(61, 255, 154, .16); white-space: nowrap; }
   table.ki tr.wahl { background: rgba(61, 255, 154, .08); }
   .ki-detail { font-size: 14px; line-height: 1.45; }
+  .plattform-nav, .zeit-nav { display: flex; flex-wrap: wrap; gap: 6px; }
+  .plattform-nav button.aktiv, .zeit-nav button.aktiv { background: rgba(61, 255, 154, .22); color: #e9fff4; }
+  .kpi-reihe { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+  .kpi { padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(61, 255, 154, .22); background: rgba(6, 22, 16, .9); }
+  .kpi span, .kpi em { display: block; color: #8fb9a4; font-size: 11px; font-style: normal; }
+  .kpi strong { display: block; margin: 6px 0 4px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+  .kpi.plus strong { color: #3dff9a; }
+  .kpi.minus strong { color: #ff8b98; }
+  .kpi.warn strong { color: #ffc14d; }
+  .diagramm { border: 1px solid rgba(61, 255, 154, .18); border-radius: 14px; padding: 12px; background: rgba(6, 22, 16, .72); }
+  .diagramm p { margin: 8px 0 0; color: #ffc14d; }
+  .diagramm svg { width: 100%; height: 140px; display: block; }
+  table.ki td.plus { color: #3dff9a; }
+  table.ki td.minus { color: #ff8b98; }
+  table.ki td.pause { color: #ffc14d; }
+  #ki-suche { width: 180px; background: rgba(5, 16, 12, .85); color: #e9fff4; border: 1px solid rgba(61, 255, 154, .4); border-radius: 999px; padding: 7px 12px; font: inherit; }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    .kpi-reihe { grid-template-columns: 1fr 1fr; }
+  }
   body.alpaka #karten { display: none; }
   .buch { padding: 16px; border-radius: 18px; border: 1px solid rgba(61, 255, 154, .28); background: rgba(6, 22, 16, .86); }
   .buch h2 { margin-bottom: 4px; }
@@ -553,6 +573,9 @@ let alleKonten = false;
 let kiFilter = "alle";
 let kiSort = "name";
 let kiWahl = "";
+let blick = "dashboard";
+let kiZeit = "alles";
+let kiSuche = "";
 
 function papierZeichnen(papier) {
   window._papier = papier;
@@ -562,106 +585,249 @@ function papierZeichnen(papier) {
   text(schalter, papier.automatisch ? "Paper-Handel ausschalten" : "Paper-Handel einschalten");
   const brett = document.getElementById("papier-brett");
   brett.replaceChildren();
-  const alpaca = papier.alpaca || {};
-  const hinweis = document.createElement("p");
-  hinweis.className = "regel breit";
-  text(hinweis, alpaca.verbunden ? "Alpaca Paper ist verbunden. Die großen Karten sind die eigene Simulation." : "Eigene Simulation mit gespieltem Geld. Alpaca ist nicht verbunden.");
-  brett.append(hinweis);
-  if (alpaca.verbunden) brett.append(kontoKarte(alpaca));
-  const titel = document.createElement("h2");
-  titel.className = "breit";
-  text(titel, "Die drei mit dem meisten Plus");
-  brett.append(titel);
-  const beste = papier.beste && papier.beste.length ? papier.beste : (papier.konten || []).slice(0, 3);
-  beste.forEach(function (konto) { brett.append(kontoKarte(konto)); });
-  const knopf = document.createElement("button");
-  knopf.type = "button";
-  knopf.className = "breit";
-  text(knopf, alleKonten ? "Nur die drei" : "Alle Konten");
-  knopf.addEventListener("click", function () {
-    alleKonten = !alleKonten;
-    papierZeichnen(papier);
-  });
-  brett.append(knopf);
-  if (alleKonten) {
-    const liste = document.createElement("div");
-    liste.className = "breit";
-    (papier.konten || []).forEach(function (konto) {
-      const zeile = document.createElement("p");
-      zeile.className = "kontozeile " + (konto.klasse || "null");
-      text(zeile, konto.name + " · " + ergebnisWort(konto.klasse, konto.differenz));
-      liste.append(zeile);
-    });
-    brett.append(liste);
-  }
-  haendlerZeichnen(brett, papier.haendler);
+  plattformZeichnen(brett, papier);
 }
 
-function haendlerZeichnen(brett, stand) {
-  if (!stand) return;
-  const kopf = document.createElement("h2");
-  kopf.className = "breit";
-  text(kopf, "KI-Zentrale");
-  const satz = document.createElement("p");
-  satz.className = "regel breit";
-  text(satz, stand.anzahl + " Trader, " + stand.aktiv + " im Wettbewerb, " + stand.pause + " pausiert, " + stand.ohne_daten + " ohne nutzbare Daten, " + stand.belastbar + " belastbar. Beste: " + stand.beste + ". Schwächste: " + stand.schwaechste + ". Letztes Lernen: " + stand.lernen + ".");
-  const metaText = document.createElement("p");
-  metaText.className = "regel breit";
-  text(metaText, stand.meta || "");
-  const filter = document.createElement("div");
-  filter.className = "breit ki-filter";
+function plattformZeichnen(brett, papier) {
+  const stand = papier.haendler || {};
+  const nav = document.createElement("div");
+  nav.className = "plattform-nav";
   [
-    ["alle", "Alle"], ["aktiv", "Aktiv"], ["pausiert", "Pausiert"],
-    ["Technik", "Technik"], ["Fundament", "Fundamental"], ["Nachrichten", "Nachrichten"],
-    ["Markt", "Markt"], ["Experiment", "Experimentell"],
-    ["kurz", "Kurzfristig"], ["mittel", "Mittelfristig"], ["lang", "Langfristig"]
+    ["dashboard", "Dashboard"], ["trader", "Alle Trader"], ["rangliste", "Rangliste"],
+    ["meta", "Meta-KI"], ["performance", "Performance"], ["positionen", "Positionen"],
+    ["historie", "Historie"], ["lernen", "Lernen"], ["validierung", "Validierung"],
+    ["status", "Datenqualität"], ["konten", "Simulationskonten"]
   ].forEach(function (paar) {
     const knopf = document.createElement("button");
     knopf.type = "button";
+    if (blick === paar[0]) knopf.className = "aktiv";
+    text(knopf, paar[1]);
+    knopf.addEventListener("click", function () { blick = paar[0]; if (window._papier) papierZeichnen(window._papier); });
+    nav.append(knopf);
+  });
+  brett.append(nav);
+  const inhalt = document.createElement("div");
+  inhalt.className = "breit";
+  if (blick === "dashboard") dashboardBlick(inhalt, stand, papier);
+  else if (blick === "rangliste" || blick === "trader") tabelleBlick(inhalt, stand, blick === "trader");
+  else if (blick === "meta") metaBlick(inhalt, stand);
+  else if (blick === "performance") performanceBlick(inhalt, stand);
+  else if (blick === "positionen") listeBlick(inhalt, stand, "offen");
+  else if (blick === "historie") listeBlick(inhalt, stand, "geschlossen");
+  else if (blick === "lernen") listeBlick(inhalt, stand, "lernen");
+  else if (blick === "validierung") listeBlick(inhalt, stand, "pruefung");
+  else if (blick === "status") statusBlick(inhalt, stand, papier);
+  else kontenBlick(inhalt, papier);
+  if (kiWahl) inhalt.append(detailBlick(stand));
+  brett.append(inhalt);
+}
+
+function kpiKarte(titel, wert, note, klasse) {
+  const karte = document.createElement("article");
+  karte.className = "kpi " + (klasse || "");
+  const name = document.createElement("span");
+  text(name, titel);
+  const zahl = document.createElement("strong");
+  text(zahl, wert == null || wert === "" ? "Keine Daten" : String(wert));
+  const hinweis = document.createElement("em");
+  text(hinweis, note || "");
+  karte.append(name, zahl, hinweis);
+  return karte;
+}
+
+function kpiKlasse(wert) {
+  const textWert = String(wert || "");
+  if (textWert === "Keine Daten" || textWert.indexOf("Nicht ausreichend") === 0) return "warn";
+  if (textWert.indexOf("-") === 0) return "minus";
+  return "";
+}
+
+function dashboardBlick(block, stand, papier) {
+  const zentrale = stand.zentrale || {};
+  const reihe = document.createElement("div");
+  reihe.className = "kpi-reihe";
+  [
+    ["Start der eröffneten Bücher", zentrale.kapital, "Nur Bücher mit gespeichertem Stand. Je Trader 10.000 Euro Start."],
+    ["Equity", zentrale.equity, "Letzter gespeicherter Stand je eröffnetem Buch."],
+    ["Cash", zentrale.cash, "Letzter gespeicherter Cash-Stand."],
+    ["Realisiert", zentrale.realisiert, zentrale.erfolg || "Keine Daten"],
+    ["Unrealisiert", zentrale.unrealisiert, "Nur Positionen mit Einstieg und aktuellem Kurs."],
+    ["Rendite", zentrale.rendite, "Mittel der Bücher mit Equity-Reihe, gegen 10.000 Euro."],
+    ["Success Rate", zentrale.erfolg, "Profitable abgeschlossene Trades geteilt durch alle abgeschlossenen."],
+    ["Abgeschlossen", String(zentrale.trades == null ? "Keine Daten" : zentrale.trades), "Nur gültige Simulationstrades."],
+    ["Offene Positionen", String(zentrale.offen == null ? "Keine Daten" : zentrale.offen), "Getrennte virtuelle Bücher."],
+    ["Maximaler Drawdown", zentrale.drawdown, "Größter Drawdown eines einzelnen Buchs."],
+    ["Profit Factor", zentrale.faktor, "Summe der Gewinne geteilt durch Summe der Verluste. Ab 20 Trades."],
+    ["Aktive Trader", String(stand.aktiv == null ? "Keine Daten" : stand.aktiv), "Regeln mit nutzbaren Kursdaten."],
+    ["Pausierte Trader", String(stand.pause == null ? "Keine Daten" : stand.pause), "Daten fehlen oder ergeben keinen Kauf."],
+    ["Validiert", String(stand.belastbar == null ? "Keine Daten" : stand.belastbar), "Mindestens 20 Fälle und positiver unterer Rand."]
+  ].forEach(function (eintrag) {
+    reihe.append(kpiKarte(eintrag[0], eintrag[1], eintrag[2], kpiKlasse(eintrag[1])));
+  });
+  block.append(reihe);
+  block.append(diagramm("Equity der Trader", (zentrale.kurven || [])[0] && (zentrale.kurven || [])[0].punkte, zentrale.hinweis));
+  const hinweis = document.createElement("p");
+  hinweis.className = "regel";
+  text(hinweis, (papier.alpaca && papier.alpaca.verbunden) ? "Alpaca Paper ist verbunden. Die Kennzahlen hier sind die lokale Simulation." : "Alpaca ist nicht verbunden. Die Kennzahlen sind die lokale Simulation.");
+  block.append(hinweis);
+}
+
+function diagramm(titel, punkte, hinweis) {
+  const kasten = document.createElement("section");
+  kasten.className = "diagramm";
+  const name = document.createElement("h2");
+  text(name, titel);
+  kasten.append(name);
+  const gefiltert = (punkte || []).filter(function (punkt) { return punktImZeitraum(punkt.zeit); });
+  if (gefiltert.length < 2) {
+    const leer = document.createElement("p");
+    text(leer, "Keine Daten. " + (hinweis || "Es liegen weniger als zwei gespeicherte Stände in diesem Zeitraum."));
+    kasten.append(leer);
+    return kasten;
+  }
+  const werte = gefiltert.map(function (punkt) { return Number(punkt.equity); });
+  const unten = Math.min.apply(null, werte);
+  const oben = Math.max.apply(null, werte);
+  const spanne = oben - unten || 1;
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("viewBox", "0 0 300 140");
+  const linie = document.createElementNS(SVG, "polyline");
+  linie.setAttribute("fill", "none");
+  linie.setAttribute("stroke", werte[werte.length - 1] >= werte[0] ? "#3dff9a" : "#ff8b98");
+  linie.setAttribute("stroke-width", "2");
+  linie.setAttribute("points", werte.map(function (wert, index) {
+    const x = werte.length === 1 ? 0 : (index / (werte.length - 1)) * 300;
+    const y = 130 - ((wert - unten) / spanne) * 120;
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" "));
+  svg.append(linie);
+  kasten.append(svg);
+  return kasten;
+}
+
+function punktImZeitraum(zeit) {
+  if (kiZeit === "alles" || !zeit) return kiZeit === "alles";
+  const ende = Date.parse(zeit);
+  if (!ende) return false;
+  const spanne = { "24h": 86400000, "7d": 7 * 86400000, "30d": 30 * 86400000, "90d": 90 * 86400000 }[kiZeit];
+  return Date.now() - ende <= spanne;
+}
+
+function zeitWahl(block) {
+  const nav = document.createElement("div");
+  nav.className = "zeit-nav";
+  [["24h", "24 Stunden"], ["7d", "7 Tage"], ["30d", "30 Tage"], ["90d", "90 Tage"], ["alles", "Gesamt"]].forEach(function (paar) {
+    const knopf = document.createElement("button");
+    knopf.type = "button";
+    if (kiZeit === paar[0]) knopf.className = "aktiv";
+    text(knopf, paar[1]);
+    knopf.addEventListener("click", function () { kiZeit = paar[0]; if (window._papier) papierZeichnen(window._papier); });
+    nav.append(knopf);
+  });
+  block.append(nav);
+}
+
+function tabelleBlick(block, stand, alle) {
+  const suche = document.createElement("input");
+  suche.id = "ki-suche";
+  suche.value = kiSuche;
+  suche.placeholder = "Trader suchen";
+  suche.setAttribute("aria-label", "Trader suchen");
+  suche.addEventListener("input", function () { kiSuche = suche.value; });
+  block.append(suche);
+  filterKnopf(block);
+  const scroller = document.createElement("div");
+  scroller.className = "ki-scroll";
+  const tabelle = document.createElement("table");
+  tabelle.className = "ki";
+  const kopf = document.createElement("tr");
+  [
+    ["platz", "Rang"], ["name", "Name"], ["gruppe", "Strategie"], ["markt", "Markt"],
+    ["horizont", "Horizont"], ["status", "Status"], ["version", "Version"],
+    ["rendite_zahl", "Rendite %"], ["ergebnis_zahl", "Euro"], ["realisiert_zahl", "Realisiert"],
+    ["unrealisiert_zahl", "Unrealisiert"], ["erfolg_zahl", "Success Rate"],
+    ["treffer_zahl", "Gewinne"], ["verlust_zahl", "Verluste"], ["trades", "Trades"],
+    ["dd_zahl", "Drawdown"], ["validierung", "Validierung"]
+  ].forEach(function (paar) {
+    const zelle = document.createElement("th");
+    text(zelle, paar[1]);
+    zelle.addEventListener("click", function () { kiSort = paar[0]; if (window._papier) papierZeichnen(window._papier); });
+    kopf.append(zelle);
+  });
+  tabelle.append(kopf);
+  kiListe(stand, alle).forEach(function (zeile) {
+    const reihe = document.createElement("tr");
+    if (zeile.name === kiWahl) reihe.className = "wahl";
+    spalten(zeile).forEach(function (wert) {
+      const zelle = document.createElement("td");
+      text(zelle, wert.text);
+      if (wert.klasse) zelle.className = wert.klasse;
+      reihe.append(zelle);
+    });
+    reihe.addEventListener("click", function () { kiWahl = zeile.name; if (window._papier) papierZeichnen(window._papier); });
+    tabelle.append(reihe);
+  });
+  scroller.append(tabelle);
+  block.append(scroller);
+}
+
+function spalten(zeile) {
+  return [
+    { text: zeile.platz || "—" },
+    { text: zeile.name },
+    { text: zeile.gruppe },
+    { text: zeile.markt },
+    { text: zeile.horizont },
+    { text: zeile.status, klasse: zeile.einsatz ? "plus" : "pause" },
+    { text: String(zeile.version) },
+    { text: zeile.rendite || "Keine Daten", klasse: klassenZahl(zeile.rendite_zahl) },
+    { text: zeile.ergebnis, klasse: klassenZahl(zeile.ergebnis_zahl) },
+    { text: zeile.realisiert_zahl == null ? "Keine Daten" : zeile.realisiert_zahl.toFixed(2) },
+    { text: zeile.unrealisiert_zahl == null ? "Keine Daten" : zeile.unrealisiert_zahl.toFixed(2) },
+    { text: zeile.erfolg || "Keine Daten" },
+    { text: String(zeile.treffer_zahl || 0) },
+    { text: String(zeile.verlust_zahl || 0) },
+    { text: String(zeile.trades || 0) },
+    { text: zeile.drawdown || "Keine Daten" },
+    { text: zeile.validierung || "Nicht ausreichend Daten", klasse: "pause" }
+  ];
+}
+
+function klassenZahl(wert) {
+  if (typeof wert !== "number") return "";
+  if (wert > 0) return "plus";
+  if (wert < 0) return "minus";
+  return "";
+}
+
+function filterKnopf(block) {
+  const filter = document.createElement("div");
+  filter.className = "ki-filter";
+  [
+    ["alle", "Alle"], ["aktiv", "Aktiv"], ["pausiert", "Pausiert"], ["validiert", "Validiert"],
+    ["Technik", "Technik"], ["Fundament", "Fundamental"], ["Nachrichten", "Nachrichten"],
+    ["Markt", "Markt"], ["Experiment", "Experimentell"],
+    ["kurz", "Kurz"], ["mittel", "Mittel"], ["lang", "Lang"]
+  ].forEach(function (paar) {
+    const knopf = document.createElement("button");
+    knopf.type = "button";
+    if (kiFilter === paar[0]) knopf.className = "aktiv";
     text(knopf, paar[1]);
     knopf.addEventListener("click", function () { kiFilter = paar[0]; if (window._papier) papierZeichnen(window._papier); });
     filter.append(knopf);
   });
-  const sortierung = document.createElement("div");
-  sortierung.className = "breit ki-sort";
-  [["name", "Name"], ["ergebnis_zahl", "Gewinn"], ["trades", "Trades"], ["drawdown", "Drawdown"]].forEach(function (paar) {
-    const knopf = document.createElement("button");
-    knopf.type = "button";
-    text(knopf, "Sortierung " + paar[1]);
-    knopf.addEventListener("click", function () { kiSort = paar[0]; if (window._papier) papierZeichnen(window._papier); });
-    sortierung.append(knopf);
-  });
-  const scroller = document.createElement("div");
-  scroller.className = "breit ki-scroll";
-  const tabelle = document.createElement("table");
-  tabelle.className = "ki";
-  const kopfzeile = document.createElement("tr");
-  ["Rang", "Name", "Gruppe", "Markt", "Horizont", "Status", "Rendite", "Euro", "Quote", "Trades", "Drawdown", "Version"].forEach(function (name) {
-    const zelle = document.createElement("th");
-    text(zelle, name);
-    kopfzeile.append(zelle);
-  });
-  tabelle.append(kopfzeile);
-  kiListe(stand).forEach(function (zeile) {
-    const reihe = document.createElement("tr");
-    if (zeile.name === kiWahl) reihe.className = "wahl";
-    [zeile.platz || "—", zeile.name, zeile.gruppe, zeile.markt, zeile.horizont, zeile.status, zeile.rendite, zeile.ergebnis, zeile.quote, String(zeile.trades), zeile.drawdown, String(zeile.version)].forEach(function (wert) {
-      const zelle = document.createElement("td");
-      text(zelle, wert);
-      reihe.append(zelle);
-    });
-    reihe.addEventListener("click", function () { kiWahl = kiWahl === zeile.name ? "" : zeile.name; if (window._papier) papierZeichnen(window._papier); });
-    tabelle.append(reihe);
-  });
-  scroller.append(tabelle);
-  brett.append(kopf, satz, metaText, filter, sortierung, scroller, kiDetail(stand), kiMeta(stand));
+  block.append(filter);
 }
 
-function kiListe(stand) {
+function kiListe(stand, alle) {
+  const suche = kiSuche.toLowerCase();
   const liste = (stand.rangliste || []).filter(function (zeile) {
+    if (suche && String(zeile.name).toLowerCase().indexOf(suche) === -1) return false;
+    if (!alle && kiFilter === "alle") return true;
     if (kiFilter === "alle") return true;
     if (kiFilter === "aktiv") return zeile.einsatz;
     if (kiFilter === "pausiert") return !zeile.einsatz;
+    if (kiFilter === "validiert") return zeile.belastbar;
     if (kiFilter === "kurz" || kiFilter === "mittel" || kiFilter === "lang") return zeile.horizont === kiFilter;
     return zeile.gruppe === kiFilter;
   });
@@ -669,66 +835,147 @@ function kiListe(stand) {
     const links = a[kiSort];
     const rechts = b[kiSort];
     if (typeof links === "number" && typeof rechts === "number") return rechts - links;
+    if (typeof links === "number") return -1;
+    if (typeof rechts === "number") return 1;
     return String(links || "").localeCompare(String(rechts || ""), "de");
   });
   return liste;
 }
 
-function kiDetail(stand) {
-  const block = document.createElement("div");
-  block.className = "breit ki-detail";
+function detailBlick(stand) {
   const zeile = (stand.rangliste || []).find(function (eintrag) { return eintrag.name === kiWahl; });
-  if (!zeile) {
-    const leer = document.createElement("p");
-    text(leer, "Trader anklicken für Strategie, Konto, Fälle und Modell.");
-    block.append(leer);
-    return block;
-  }
+  const block = document.createElement("section");
+  block.className = "ki-detail";
+  if (!zeile) return block;
+  const kopf = document.createElement("h2");
+  text(kopf, zeile.name);
+  const schliessen = document.createElement("button");
+  schliessen.type = "button";
+  text(schliessen, "Schließen");
+  schliessen.addEventListener("click", function () { kiWahl = ""; if (window._papier) papierZeichnen(window._papier); });
+  block.append(kopf, schliessen);
   const detail = zeile.detail || {};
-  const absatz = document.createElement("p");
-  const verlauf = (detail.verlauf || []).length > 1 ? detail.verlauf.join(" → ") : "Verlauf liegt noch nicht vor.";
-  text(absatz, zeile.name + ". " + zeile.regel + " Daten: " + zeile.daten + " Merkmale: " + zeile.merkmale_text + (zeile.fehlt ? " Pause: " + zeile.fehlt : "") + " Start " + (detail.start || "10000.00") + " Euro, Equity " + (detail.equity || "—") + ", Cash " + (detail.cash || "—") + ". " + zeile.lernstatus + ". Version " + zeile.version + ". Sharpe " + zeile.sharpe + ". Sortino " + zeile.sortino + ". Faktor " + zeile.faktor + ". Benchmark " + zeile.benchmark + ". Verlauf: " + verlauf);
-  block.append(absatz);
-  (detail.offen || []).forEach(function (position) {
-    const zeileText = document.createElement("p");
-    text(zeileText, "Offen " + position.symbol + " Menge " + position.menge + " Einstieg " + position.einstieg);
-    block.append(zeileText);
+  const karten = document.createElement("div");
+  karten.className = "kpi-reihe";
+  karten.append(kpiKarte("Status", zeile.status, zeile.fehlt || zeile.regel));
+  karten.append(kpiKarte("Version", String(zeile.version), zeile.lernstatus));
+  karten.append(kpiKarte("Start", detail.start || "10000.00", "Virtuelles Startkapital in Euro."));
+  karten.append(kpiKarte("Equity", detail.hat_buch ? detail.equity : "Keine Daten", "Letzter Buchstand."));
+  karten.append(kpiKarte("Success Rate", zeile.erfolg, "Nur abgeschlossene Trades nach Gebühren."));
+  karten.append(kpiKarte("Profit Factor", zeile.faktor, "Ab 20 Trades."));
+  karten.append(kpiKarte("Drawdown", zeile.drawdown, "Aus der Equity-Reihe."));
+  karten.append(kpiKarte("Haltedauer", zeile.haltung, "Nur wenn Ein- und Ausstiegszeit gespeichert sind."));
+  karten.append(kpiKarte("Serie", zeile.serie, "Längste Folge abgeschlossener Gewinne und Verluste."));
+  block.append(karten);
+  block.append(diagramm("Equity " + zeile.name, detail.punkte, "Zwei Stände fehlen noch."));
+  (detail.offen || []).forEach(function (eintrag) {
+    const satz = document.createElement("p");
+    text(satz, "Offen " + eintrag.symbol + ", Menge " + eintrag.menge + ", Einstieg " + eintrag.einstieg);
+    block.append(satz);
   });
-  (detail.geschlossen || []).forEach(function (fall) {
-    const zeileText = document.createElement("p");
-    text(zeileText, "Geschlossen " + fall.symbol + " Netto " + fall.ergebnis + " Brutto " + (fall.brutto || "—"));
-    block.append(zeileText);
+  (detail.geschlossen || []).forEach(function (eintrag) {
+    const satz = document.createElement("p");
+    text(satz, "Geschlossen " + eintrag.symbol + ", Netto " + eintrag.ergebnis + ", Brutto " + (eintrag.brutto || "Keine Daten"));
+    block.append(satz);
   });
-  (detail.entscheidungen || []).slice(0, 3).forEach(function (entscheidung) {
-    const zeileText = document.createElement("p");
-    text(zeileText, (entscheidung.entscheidung || "") + " Signal " + (entscheidung.signal || "") + " " + (entscheidung.wahrscheinlichkeit || "ohne Wahrscheinlichkeit") + ". " + (entscheidung.grund || ""));
-    block.append(zeileText);
+  (detail.entscheidungen || []).slice(0, 5).forEach(function (eintrag) {
+    const satz = document.createElement("p");
+    text(satz, (eintrag.entscheidung || "") + " · Signal " + (eintrag.signal || "—") + " · " + (eintrag.wahrscheinlichkeit || "ohne Wahrscheinlichkeit") + " · " + (eintrag.grund || ""));
+    block.append(satz);
+  });
+  (detail.versionen || []).forEach(function (eintrag) {
+    const satz = document.createElement("p");
+    text(satz, "Version " + eintrag.version + " · " + eintrag.beispiele + " Fälle · " + eintrag.grund);
+    block.append(satz);
   });
   const pruefung = detail.pruefung || {};
-  const prueftext = document.createElement("p");
-  text(prueftext, "Prüfung: " + (pruefung.grund || "Noch keine unabhängige Prüfung."));
-  block.append(prueftext);
+  const satz = document.createElement("p");
+  text(satz, "Validierung: " + (pruefung.status || "Nicht ausreichend Daten") + ". " + (pruefung.grund || ""));
+  block.append(satz);
   return block;
 }
 
-function kiMeta(stand) {
-  const block = document.createElement("div");
-  block.className = "breit ki-detail";
+function metaBlick(block, stand) {
   const bericht = stand.meta_bericht || {};
   const phase = bericht.phasen || {};
-  const kopf = document.createElement("h2");
-  text(kopf, "Meta");
-  const textZeile = document.createElement("p");
-  const namen = Object.keys(bericht.gewichte || {}).map(function (name) { return name + " " + bericht.gewichte[name]; }).join(", ");
-  text(textZeile, "Phase: " + (phase.phase || "nicht gemessen") + ". " + (phase.grund || "") + " Gewichtung: " + (namen || "keine") + ". " + (bericht.hinweis || ""));
-  block.append(kopf, textZeile);
+  const karten = document.createElement("div");
+  karten.className = "kpi-reihe";
+  karten.append(kpiKarte("Marktphase", phase.phase || "nicht gemessen", phase.grund || "Keine Indexreihe."));
+  karten.append(kpiKarte("Gewichtung", Object.keys(bericht.gewichte || {}).length ? "Vorschlag" : "keine", bericht.hinweis || ""));
+  block.append(karten);
   (bericht.schwaechen || []).forEach(function (eintrag) {
-    const zeile = document.createElement("p");
-    text(zeile, eintrag.name + ": " + eintrag.grund);
-    block.append(zeile);
+    const satz = document.createElement("p");
+    text(satz, eintrag.name + ": " + eintrag.grund);
+    block.append(satz);
   });
-  return block;
 }
+
+function performanceBlick(block, stand) {
+  zeitWahl(block);
+  const zentrale = stand.zentrale || {};
+  const kurven = zentrale.kurven || [];
+  if (!kurven.length) {
+    block.append(diagramm("Performance", [], "Noch keine Equity-Reihe. Phasen, Horizonte und Profit Factor bleiben ohne Stände leer."));
+    return;
+  }
+  kurven.forEach(function (kurve) { block.append(diagramm(kurve.name, kurve.punkte)); });
+}
+
+function listeBlick(block, stand, art) {
+  const zeilen = stand.rangliste || [];
+  let zahl = 0;
+  zeilen.forEach(function (zeile) {
+    const detail = zeile.detail || {};
+    const eintraege = art === "lernen" ? (detail.versionen || []) : art === "pruefung" ? [detail.pruefung || {}] : (detail[art] || []);
+    eintraege.forEach(function (eintrag) {
+      if (!eintrag || (art === "pruefung" && !eintrag.grund)) return;
+      zahl += 1;
+      const satz = document.createElement("p");
+      text(satz, zeile.name + " · " + (art === "offen" ? (eintrag.symbol + " " + eintrag.menge) : art === "geschlossen" ? (eintrag.symbol + " Netto " + eintrag.ergebnis) : (eintrag.grund || eintrag.entscheidung || eintrag.version || "")));
+      block.append(satz);
+    });
+  });
+  if (!zahl) {
+    const leer = document.createElement("p");
+    leer.className = "leerfeld";
+    text(leer, "Keine Daten.");
+    block.append(leer);
+  }
+}
+
+function statusBlick(block, stand, papier) {
+  const karten = document.createElement("div");
+  karten.className = "kpi-reihe";
+  karten.append(kpiKarte("Trader", String(stand.anzahl || "Keine Daten"), "30 angelegte Strategien."));
+  karten.append(kpiKarte("Ohne Daten", String(stand.ohne_daten == null ? "Keine Daten" : stand.ohne_daten), "Diese Regeln kaufen nicht."));
+  karten.append(kpiKarte("Letztes Lernen", stand.lernen || "Keine Daten", "Zeit der letzten Modellversion."));
+  karten.append(kpiKarte("Paper", papier.automatisch ? "an" : "aus", "Live-Orders bleiben gesperrt."));
+  block.append(karten);
+  (stand.rangliste || []).filter(function (zeile) { return zeile.fehlt; }).forEach(function (zeile) {
+    const satz = document.createElement("p");
+    text(satz, zeile.name + " braucht: " + zeile.daten + " " + zeile.fehlt);
+    block.append(satz);
+  });
+}
+
+function kontenBlick(block, papier) {
+  const beste = papier.beste && papier.beste.length ? papier.beste : (papier.konten || []).slice(0, 3);
+  beste.forEach(function (konto) { block.append(kontoKarte(konto)); });
+  const knopf = document.createElement("button");
+  knopf.type = "button";
+  text(knopf, alleKonten ? "Nur die drei" : "Alle Konten");
+  knopf.addEventListener("click", function () { alleKonten = !alleKonten; papierZeichnen(papier); });
+  block.append(knopf);
+  if (alleKonten) {
+    (papier.konten || []).forEach(function (konto) {
+      const zeile = document.createElement("p");
+      zeile.className = "kontozeile " + (konto.klasse || "null");
+      text(zeile, konto.name + " · " + ergebnisWort(konto.klasse, konto.differenz));
+      block.append(zeile);
+    });
+  }
+}
+
 
 function euroWort(wert) {
   return String(wert || "0,00 €").replace("€", "Euro").replace(/^[+−-]\s*/, "").trim();

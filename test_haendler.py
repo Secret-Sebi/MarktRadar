@@ -217,11 +217,27 @@ class HaendlerTests(unittest.TestCase):
                         ("1.00" if nummer % 2 == 0 else "-1.00", f"2026-01-{(nummer % 28) + 1:02d}T00:00:00+00:00"),
                     )
             bericht = pruefe(pfad, "Momentum")
-            self.assertGreater(bericht["test_ab"], bericht["train_bis"])
+            self.assertEqual(bericht["status"], "Nicht ausreichend Daten")
             self.assertFalse(bericht["besser"])
+            self.assertNotIn("test_ab", bericht)
             with sqlite3.connect(pfad) as verbindung:
                 modell = verbindung.execute("SELECT COUNT(*) FROM ki_haendler_modell").fetchone()[0]
             self.assertEqual(modell, 0)
+            with sqlite3.connect(pfad) as verbindung:
+                for nummer in range(12):
+                    verbindung.execute(
+                        """
+                        INSERT INTO ki_haendler_fall
+                        (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit)
+                        VALUES ('Momentum', 'AAPL', 'mittel', '[0.2, 0.2]', '100', '101', '1.00', 'Annahme', 'nicht gemessen', 'simulation', 0, ?)
+                        """,
+                        (f"2026-03-{(nummer % 28) + 1:02d}T00:00:00+00:00",),
+                    )
+            spaeter = pruefe(pfad, "Momentum")
+            self.assertLess(spaeter["train_bis"], spaeter["pruef_ab"])
+            self.assertLess(spaeter["pruef_ab"], spaeter["test_ab"])
+            self.assertFalse(spaeter["besser"])
+            self.assertIn("Benchmark nicht gemessen", spaeter["grund"])
 
     def test_zentrale_zeigt_echte_null_und_keine_phase(self):
         with tempfile.TemporaryDirectory() as ordner:
@@ -233,6 +249,9 @@ class HaendlerTests(unittest.TestCase):
             self.assertTrue(all(zeile["quelle"] == "simulation" and zeile["ergebnis"] == "0.00" for zeile in bild["rangliste"]))
             self.assertEqual(bild["meta_bericht"]["phasen"]["phase"], "nicht gemessen")
             self.assertIn("Nicht ausreichend", bild["rangliste"][0]["sharpe"])
+            self.assertEqual(bild["zentrale"]["erfolg"], "Keine Daten")
+            self.assertEqual(bild["zentrale"]["kapital"], "Keine Daten")
+            self.assertEqual(bild["zentrale"]["faktor"], "Keine Daten")
 
     def test_live_endpunkt_bleibt_gesperrt(self):
         from papier import PapierFehler, basis_pruefen
