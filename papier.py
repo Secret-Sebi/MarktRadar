@@ -189,6 +189,12 @@ def strategie_uebernehmen(trades: int) -> tuple[bool, str]:
     return False, "Eine neue Regel wird nicht automatisch übernommen. Dafür fehlt eine getrennte Prüfung außerhalb dieses Laufs."
 
 
+def _haendler_uebersicht(pfad: Path) -> dict:
+    from haendler import uebersicht
+
+    return uebersicht(pfad)
+
+
 def ansicht(pfad: Path) -> dict:
     lage = zustand_lesen(pfad)
     konto = _letzte_kontozeile(pfad)
@@ -215,6 +221,7 @@ def ansicht(pfad: Path) -> dict:
         "konten": _konten_sortiert(pfad),
         "beste": beste_konten(_konten_sortiert(pfad)),
         "alpaca": _alpaca_karte(pfad),
+        "haendler": _haendler_uebersicht(pfad),
         "sicherheit": _sicherheit(pfad, lage),
         "positionen": _positionen(pfad),
         "orders": _orders(pfad),
@@ -300,6 +307,9 @@ def _runde(pfad, zeilen, oeffnen, wechselkurs, jetzt: datetime, liste=None) -> d
         elif name == "SELL":
             _verkaufen(pfad, oeffnen, zeile, klasse, jetzt)
     _schutz_alle(pfad, oeffnen)
+    from haendler import runde as haendler_runde
+
+    haendler_runde(pfad, zeilen, {str(_feld(zeile, "symbol") or "") for zeile in zeilen or ()}, kurs, jetzt, False)
     return ansicht(pfad)
 
 
@@ -350,6 +360,9 @@ def _lokal(pfad, zeilen, wechselkurs, oeffnen, jetzt: datetime, liste, nur_verka
         kurs = None
     for konto in KONTEN:
         _konto_lauf(pfad, konto["name"], zeilen, namen, kurs, jetzt, nur_verkauf)
+    from haendler import runde as haendler_runde
+
+    haendler_runde(pfad, zeilen, namen, kurs, jetzt, nur_verkauf)
     return ansicht(pfad)
 
 

@@ -86,6 +86,8 @@
   .kontozeile { margin: 0; padding: 8px 0; border-bottom: 1px solid rgba(61, 255, 154, .16); font-size: 16px; }
   .kontozeile.plus { color: #3dff9a; }
   .kontozeile.minus { color: #ff6b6b; }
+  .rangliste { max-height: 320px; overflow: auto; font-size: 14px; }
+  .rangliste p { margin: 0; padding: 6px 0; border-bottom: 1px solid rgba(61, 255, 154, .12); }
   body.alpaka #karten { display: none; }
   .buch { padding: 16px; border-radius: 18px; border: 1px solid rgba(61, 255, 154, .28); background: rgba(6, 22, 16, .86); }
   .buch h2 { margin-bottom: 4px; }
@@ -583,6 +585,30 @@ function papierZeichnen(papier) {
     });
     brett.append(liste);
   }
+  haendlerZeichnen(brett, papier.haendler);
+}
+
+function haendlerZeichnen(brett, stand) {
+  if (!stand) return;
+  const kopf = document.createElement("h2");
+  kopf.className = "breit";
+  text(kopf, "KI-Rangliste");
+  const satz = document.createElement("p");
+  satz.className = "regel breit";
+  text(satz, stand.anzahl + " Trader, " + stand.aktiv + " im Wettbewerb, " + stand.pause + " pausiert. Beste: " + stand.beste + ". Schwächste: " + stand.schwaechste + ".");
+  const meta = document.createElement("p");
+  meta.className = "regel breit";
+  text(meta, stand.meta || "");
+  const liste = document.createElement("div");
+  liste.className = "breit rangliste";
+  (stand.rangliste || []).forEach(function (zeile) {
+    const block = document.createElement("p");
+    const platz = zeile.platz ? zeile.platz + ". " : "";
+    const status = zeile.einsatz ? "Wettbewerb" : "pausiert";
+    text(block, platz + zeile.name + " · " + zeile.gruppe + " · " + zeile.horizont + " · " + status + " · " + zeile.trades + " Fälle · " + zeile.ergebnis + " · " + (zeile.letzte || zeile.regel));
+    liste.append(block);
+  });
+  brett.append(kopf, satz, meta, liste);
 }
 
 function euroWort(wert) {
