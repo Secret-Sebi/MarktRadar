@@ -72,17 +72,13 @@ def stand_bauen(zeilen, moment: datetime, naechste: int, arbeitet: bool = False)
 
 
 def bereich(zeile) -> str:
+    from auswertung import _markt
+
     symbol = str(getattr(zeile, "symbol", ""))
-    if symbol.endswith("-USD"):
-        return "Krypto"
     zahlen = getattr(zeile, "kennzahlen", None)
     if zahlen is not None and getattr(zahlen, "ist_etf", False):
         return "ETFs"
-    if symbol.endswith(".DE"):
-        return "Deutschland"
-    if "." in symbol:
-        return "Europa"
-    return "USA"
+    return _markt(symbol, "")
 
 
 def _karte(zeile) -> dict:

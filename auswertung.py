@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Sequence
@@ -57,7 +58,10 @@ def merken(pfad: Path, karten) -> None:
             )
 
 
-def bestand(pfad: Path, symbole: tuple[str, ...] = (), jetzt: int | None = None) -> dict:
+_US_KLASSE = re.compile(r"^[A-Z]{1,5}\.[A-Z]$")
+
+
+def bestand(pfad: Path, symbole: tuple[str, ...] = (), jetzt: int | None = None, watchlist: tuple[str, ...] = ()) -> dict:
     """Kompakte Liste des Universums. Eine fehlende oder veraltete Zeile gilt nicht als analysiert."""
     moment = int(time.time()) if jetzt is None else int(jetzt)
     gespeichert: dict[str, tuple] = {}
@@ -67,7 +71,8 @@ def bestand(pfad: Path, symbole: tuple[str, ...] = (), jetzt: int | None = None)
             _tabelle(verbindung)
             for zeile in verbindung.execute(
                 """
-                SELECT symbol, name, preis, tag, tag_wert, richtung, datenstatus, bereich, kurszeit, aufwaerts, herkunft, muster
+                SELECT symbol, name, preis, tag, tag_wert, richtung, datenstatus, bereich, kurszeit,
+                       aufwaerts, herkunft, muster, ungewoehnlich, aktualisiert
                 FROM auswertung
                 """
             ):
@@ -93,14 +98,18 @@ def bestand(pfad: Path, symbole: tuple[str, ...] = (), jetzt: int | None = None)
                     except (TypeError, ValueError):
                         continue
     reihenfolge = tuple(dict.fromkeys((*symbole, *gespeichert)))
+    liste = {str(symbol).upper() for symbol in watchlist}
     zeilen = []
+    letzte = None
     for symbol in reihenfolge:
         zeile = gespeichert.get(symbol)
-        if zeile is None:
-            zeilen.append(_bestand_zeile(symbol, None, moment, reihen.get(symbol)))
-        else:
-            zeilen.append(_bestand_zeile(symbol, zeile, moment, reihen.get(symbol)))
-    return {"zeilen": zeilen, "universum": len(tuple(dict.fromkeys(symbole)))}
+        eintrag = _bestand_zeile(symbol, zeile, moment, reihen.get(symbol))
+        eintrag["liste"] = symbol in liste
+        zeilen.append(eintrag)
+        stempel = None if zeile is None else zeile[13]
+        if isinstance(stempel, int) and not isinstance(stempel, bool) and (letzte is None or stempel > letzte):
+            letzte = stempel
+    return {"zeilen": zeilen, "universum": len(tuple(dict.fromkeys(symbole))), "letzte": letzte}
 
 
 def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[float] | None) -> dict:
@@ -116,13 +125,14 @@ def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[flo
             "richtung": "",
             "datenstatus": "unvollstaendig",
             "bereich": _bereich_symbol(symbol),
+            "analyse": "ausstehend",
             "kurszeit": None,
             "aufwaerts": None,
             "herkunft": "",
             "lage": "ausstehend",
             "reihe": reihe if reihe and len(reihe) >= 2 else None,
         }
-    _symbol, name, preis, tag, tag_wert, richtung, datenstatus, bereich, kurszeit, aufwaerts, herkunft, muster = zeile
+    _symbol, name, preis, tag, tag_wert, richtung, datenstatus, bereich, kurszeit, aufwaerts, herkunft, muster, ungewoehnlich, _aktualisiert = zeile
     qualitaet = str(_bild(muster).get("qualitaet") or "")
     if qualitaet not in ("vorsichtig", "belastbarer"):
         aufwaerts = None
@@ -135,6 +145,15 @@ def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[flo
         lage = "fehlend"
     else:
         lage = "analysiert"
+    preis_da = bool(preis) and str(preis) not in ("—", "-")
+    if lage == "veraltet":
+        analyse = "veraltet"
+    elif gespeichert == "ok" and frische == "ok" and preis_da and ungewoehnlich is not None:
+        analyse = "abgeschlossen"
+    elif not preis_da or gespeichert in ("", "unvollstaendig") or frische == "unvollstaendig":
+        analyse = "fehlgeschlagen"
+    else:
+        analyse = "ausstehend"
     vorsprung = aufwaerts if isinstance(aufwaerts, (int, float)) and not isinstance(aufwaerts, bool) else None
     bewegung = tag_wert if isinstance(tag_wert, (int, float)) and not isinstance(tag_wert, bool) else None
     return {
@@ -145,7 +164,8 @@ def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[flo
         "tag_wert": bewegung,
         "richtung": str(richtung or ""),
         "datenstatus": gespeichert or frische,
-        "bereich": str(bereich or _bereich_symbol(symbol)),
+        "bereich": _markt(symbol, str(bereich or "")),
+        "analyse": analyse,
         "kurszeit": kurszeit if isinstance(kurszeit, int) and not isinstance(kurszeit, bool) else None,
         "aufwaerts": vorsprung,
         "herkunft": str(herkunft or ""),
@@ -154,11 +174,23 @@ def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[flo
     }
 
 
+def _markt(symbol: str, bereich: str) -> str:
+    if bereich == "ETFs":
+        return "ETFs"
+    if bereich == "Krypto" or symbol.endswith("-USD"):
+        return "Krypto"
+    if _US_KLASSE.fullmatch(symbol):
+        return "USA"
+    return bereich or _bereich_symbol(symbol)
+
+
 def _bereich_symbol(symbol: str) -> str:
     if symbol.endswith("-USD"):
         return "Krypto"
     if symbol.endswith(".DE"):
         return "Deutschland"
+    if _US_KLASSE.fullmatch(symbol):
+        return "USA"
     if "." in symbol:
         return "Europa"
     return "USA"

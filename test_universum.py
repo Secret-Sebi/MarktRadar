@@ -229,6 +229,7 @@ class UniversumTests(unittest.TestCase):
                         "datenstatus": "ok",
                         "bereich": "Deutschland",
                         "kurszeit": jetzt,
+                        "ungewoehnlich": "",
                     },
                     {
                         "symbol": "AMD",
@@ -242,13 +243,30 @@ class UniversumTests(unittest.TestCase):
                         "bereich": "USA",
                         "kurszeit": jetzt - 20 * 86400,
                     },
+                    {
+                        "symbol": "MSFT",
+                        "name": "Microsoft",
+                        "preis": "400 EUR",
+                        "tag": "+1 %",
+                        "tag_wert": 1,
+                        "richtung": "hoch",
+                        "herkunft": "Yahoo",
+                        "datenstatus": "ok",
+                        "bereich": "USA",
+                        "kurszeit": jetzt,
+                    },
                 ),
             )
-            bild = bestand(pfad, ("SAP.DE", "AMD", "SIE.DE"), jetzt)
+            bild = bestand(pfad, ("SAP.DE", "AMD", "SIE.DE", "MSFT"), jetzt)
         lagen = {zeile["symbol"]: zeile["lage"] for zeile in bild["zeilen"]}
         self.assertEqual(lagen["SAP.DE"], "analysiert")
+        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SAP.DE")["analyse"], "abgeschlossen")
         self.assertEqual(lagen["AMD"], "veraltet")
+        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "AMD")["analyse"], "veraltet")
+        self.assertEqual(lagen["MSFT"], "analysiert")
+        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "MSFT")["analyse"], "ausstehend")
         self.assertEqual(lagen["SIE.DE"], "ausstehend")
+        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SIE.DE")["analyse"], "ausstehend")
         self.assertIsNone(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SIE.DE")["preis"])
         self.assertIsNone(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SAP.DE")["aufwaerts"])
 

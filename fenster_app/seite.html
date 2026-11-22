@@ -20,6 +20,7 @@
     margin: 0; color: var(--text);
     font: 15px/1.4 "Avenir Next", "Segoe UI", sans-serif;
     background: radial-gradient(1200px 600px at 10% -10%, #12382a, #07140f 55%);
+    display: flex; flex-direction: column;
   }
   button, input { font: inherit; color: inherit; }
   header {
@@ -27,17 +28,17 @@
     padding: 12px 18px; border-bottom: 1px solid var(--linie);
   }
   h1 { margin: 0; font-size: 13px; letter-spacing: .16em; color: var(--gruen); }
-  .werkzeuge { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .werkzeuge { margin-left: auto; display: flex; gap: 8px; align-items: center; position: relative; }
   input[type="search"], input[type="text"] {
     background: rgba(5, 16, 12, .85); border: 1px solid rgba(61, 255, 154, .4);
-    border-radius: 999px; padding: 7px 12px; min-width: 0;
+    border-radius: 999px; padding: 7px 12px; min-width: 0; width: min(280px, 46vw);
   }
   header button, .filter button, .nav button {
     background: transparent; border: 1px solid var(--linie); border-radius: 999px;
     padding: 6px 12px; cursor: pointer;
   }
   header button.aktiv, .filter button.aktiv, .nav button.aktiv { background: rgba(61, 255, 154, .2); }
-  .app { display: grid; grid-template-columns: 196px 1fr; height: calc(100% - 58px); }
+  .app { display: grid; grid-template-columns: 196px 1fr; flex: 1; min-height: 0; }
   .nav { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-right: 1px solid var(--linie); }
   .nav button { text-align: left; border-radius: 12px; padding: 10px 12px; }
   .nav .status { margin-top: auto; color: var(--ruhig); font-size: 12px; }
@@ -73,8 +74,18 @@
   details { margin-top: 10px; }
   summary { cursor: pointer; color: var(--gruen); }
   .leer { color: var(--ruhig); }
-  #treffer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-  #treffer button { border-radius: 999px; }
+  #treffer {
+    display: none; position: absolute; top: calc(100% + 8px); right: 0; z-index: 6;
+    width: min(440px, 86vw); max-height: 360px; overflow: auto;
+    background: #0c2219; border: 1px solid var(--linie); border-radius: 16px; padding: 8px;
+  }
+  #treffer.offen { display: flex; flex-direction: column; gap: 6px; }
+  #treffer button, #treffer .suchzeile { text-align: left; }
+  .suchzeile { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--linie); }
+  @media (max-width: 1280px) {
+    header { flex-wrap: wrap; }
+    .werkzeuge { margin-left: 0; flex: 1 1 280px; }
+  }
   @media (max-width: 1100px) {
     .kpi-reihe { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .zwei { grid-template-columns: 1fr; }
@@ -96,13 +107,13 @@
     <button id="finden" type="button">Kürzel suchen</button>
     <button id="neu" type="button">Aktualisieren</button>
     <span id="uhr"></span>
+    <div id="treffer"></div>
   </div>
 </header>
 <div class="app">
   <nav class="nav" id="nav"></nav>
   <main id="inhalt"></main>
 </div>
-<div id="treffer"></div>
 <script>
 const SVG = "http://www.w3.org/2000/svg";
 const NAV = [
@@ -119,7 +130,9 @@ let standJetzt = null;
 let zuletzt = "";
 let seite = "dashboard";
 let detail = null;
-let filter = { bereich: "Alle", lage: "alle", richtung: "alle", sort: "bewegung" };
+let filter = { bereich: "Alle", analyse: "alle", richtung: "alle", sort: "bewegung" };
+let verbindung = "verbunden";
+let suchTimer = 0;
 let traderFilter = { status: "alle", sort: "name", richtung: "ab" };
 let zeit = "alles";
 
@@ -214,7 +227,7 @@ function aktienKarte(zeile) {
   const tag = el("div", richtungKlasse(zeile) === "hoch" ? "plus" : richtungKlasse(zeile) === "runter" ? "minus" : "ruhig");
   text(tag, zahl(zeile.tag_wert) ? zeile.tag : LEER);
   const chips = el("div", "chips");
-  chips.append(datenChip(zeile), chip("Nicht validiert", "warn"));
+  chips.append(datenChip(zeile), chip(analyseWort(zeile.analyse), zeile.analyse === "abgeschlossen" ? "plus" : "warn"), chip("Nicht validiert", "warn"));
   karte.append(name, symbol, preis, tag, spark(zeile.reihe), chips);
   karte.addEventListener("click", function () { detail = { art: "aktie", id: zeile.symbol }; zeichnen(standJetzt); });
   return karte;
@@ -321,19 +334,78 @@ function fortschritt(block) {
   });
 }
 
+function analyseWort(wert) {
+  if (wert === "abgeschlossen") return "Messung fertig";
+  if (wert === "ausstehend") return "Ausstehend";
+  if (wert === "veraltet") return "Veraltet";
+  if (wert === "fehlgeschlagen") return "Fehlgeschlagen";
+  return LEER;
+}
+
+function laufPanel(aktien) {
+  const lauf = (standJetzt && standJetzt.lauf) || {};
+  const panel = el("section", "panel");
+  const titel = el("h2");
+  let zustand = "Leerlauf";
+  if (verbindung !== "verbunden") zustand = verbindung;
+  else if (lauf.arbeitet) zustand = "Analyse läuft";
+  text(titel, "Systemstatus: " + zustand);
+  const zeilen = el("div");
+  function zeile(links, rechts) {
+    const block = el("div", "zeile");
+    const name = el("span");
+    const wert = el("span");
+    text(name, links);
+    text(wert, rechts);
+    block.append(name, wert);
+    zeilen.append(block);
+  }
+  zeile("Aktuell", lauf.aktuell || "keine");
+  if (lauf.runde_von) {
+    zeile("Aktuelle Runde", lauf.runde_fertig + " / " + lauf.runde_von);
+    zeile("Fortschritt", Math.round((lauf.runde_fertig / lauf.runde_von) * 1000) / 10 + " %");
+  } else {
+    zeile("Aktuelle Runde", "keine");
+  }
+  zeile("Kursdaten aktuell", aktien.filter(function (eintrag) { return eintrag.lage === "analysiert"; }).length + " / " + aktien.length);
+  zeile("Messung abgeschlossen", aktien.filter(function (eintrag) { return eintrag.analyse === "abgeschlossen"; }).length + " / " + aktien.length);
+  zeile("Ausstehend", String(aktien.filter(function (eintrag) { return eintrag.analyse === "ausstehend"; }).length));
+  zeile("Fehlgeschlagen", String(aktien.filter(function (eintrag) { return eintrag.analyse === "fehlgeschlagen"; }).length));
+  zeile("Letzte gespeicherte Messung", lauf.letzte ? new Date(lauf.letzte * 1000).toLocaleString("de-DE") : "nicht gespeichert");
+  zeile("Nächste Runde", lauf.naechste ? "in " + Math.max(1, Math.round(lauf.naechste / 60)) + " Minuten" : "nicht geplant");
+  const deckung = (standJetzt && standJetzt.abdeckung) || {};
+  if (deckung.symbole != null) zeile("Gespeicherte Symbole", String(deckung.symbole));
+  if (deckung.eindeutig != null) zeile("Eindeutig", String(deckung.eindeutig));
+  if ((deckung.fehlt || []).length) zeile("Indexquelle fehlgeschlagen", deckung.fehlt.join(", "));
+  if (deckung.hinweis) zeile("Universum", deckung.hinweis);
+  const hinweis = el("p", "ruhig");
+  text(hinweis, "Ein frischer Kurs ist keine abgeschlossene Messung. Die Messung umfasst Kurs, Technik, Nachrichten, Modell, Fundamentaldaten und Muster in einem Durchgang. Ein einzelner Schritt wird nicht als erledigt gezeigt.");
+  panel.append(titel, zeilen, hinweis);
+  return panel;
+}
+
+function lokaleTreffer(zeilen, text) {
+  const begriff = String(text || "").trim().toLowerCase();
+  if (begriff.length < 2) return [];
+  return (zeilen || []).filter(function (zeile) {
+    return ((zeile.name || "") + " " + (zeile.symbol || "")).toLowerCase().indexOf(begriff) !== -1;
+  }).slice(0, 8);
+}
+
 function dashboard() {
   const block = el("div");
   const aktien = aktienZeilen();
-  const analysiert = aktien.filter(function (zeile) { return zeile.lage === "analysiert"; }).length;
+  const kursAktuell = aktien.filter(function (zeile) { return zeile.lage === "analysiert"; }).length;
+  const messung = aktien.filter(function (zeile) { return zeile.analyse === "abgeschlossen"; }).length;
   const chancen = ((standJetzt && standJetzt.prognosen) || []).filter(function (eintrag) { return eintrag.p_hoch != null; }).length;
   const reihe = el("div", "kpi-reihe");
   reihe.append(kpi("Erfasste Aktien", String(aktien.length || (standJetzt.abdeckung && standJetzt.abdeckung.symbole) || LEER), "aktien"));
-  reihe.append(kpi("Analysiert", String(analysiert), "aktien"));
+  reihe.append(kpi("Kurs aktuell", String(kursAktuell), "aktien"));
+  reihe.append(kpi("Messung fertig", String(messung), "aktien"));
   reihe.append(kpi("Chancen", chancen ? String(chancen) : "0", "aktien"));
   reihe.append(kpi("Aktive Trader", haendler().aktiv == null ? LEER : String(haendler().aktiv), "trader"));
   reihe.append(kpi("Paper-Performance", zentrale().rendite || LEER, "performance"));
-  reihe.append(kpi("Status", standJetzt.arbeitet ? "Misst" : "Bereit", "aktien"));
-  block.append(reihe);
+  block.append(reihe, laufPanel(aktien));
   const hinweis = el("p", "ruhig");
   text(hinweis, chancen ? "" : "Validierte Chancen: " + LEER + ".");
   block.append(hinweis);
@@ -373,11 +445,11 @@ function filterLeiste() {
     leiste.append(knoten);
   }
   ["Alle", "USA", "Deutschland", "Europa", "ETFs"].forEach(function (name) { knopf("bereich", name, name); });
-  knopf("lage", "alle", "Alle Zustände");
-  knopf("lage", "analysiert", "Analysiert");
-  knopf("lage", "ausstehend", "Ausstehend");
-  knopf("lage", "veraltet", "Veraltet");
-  knopf("lage", "fehlend", "Fehlend");
+  knopf("analyse", "alle", "Alle Zustände");
+  knopf("analyse", "abgeschlossen", "Analysiert");
+  knopf("analyse", "ausstehend", "Ausstehend");
+  knopf("analyse", "veraltet", "Veraltet");
+  knopf("analyse", "fehlgeschlagen", "Fehlgeschlagen");
   knopf("richtung", "alle", "Beide Richtungen");
   knopf("richtung", "hoch", "Steigend");
   knopf("richtung", "runter", "Fallend");
@@ -388,14 +460,12 @@ function filterLeiste() {
 }
 
 function gefilterteAktien() {
-  const suche = document.getElementById("suche").value.trim().toLowerCase();
   return aktienZeilen().filter(function (zeile) {
     if (filter.bereich !== "Alle" && zeile.bereich !== filter.bereich) return false;
-    if (filter.lage !== "alle" && zeile.lage !== filter.lage) return false;
+    if (filter.analyse !== "alle" && zeile.analyse !== filter.analyse) return false;
     if (filter.richtung === "hoch" && !(zahl(zeile.tag_wert) && zeile.tag_wert > 0)) return false;
     if (filter.richtung === "runter" && !(zahl(zeile.tag_wert) && zeile.tag_wert < 0)) return false;
-    if (!suche) return true;
-    return ((zeile.name || "") + " " + zeile.symbol).toLowerCase().indexOf(suche) !== -1;
+    return true;
   }).sort(function (a, b) {
     if (filter.sort === "name") return String(a.name).localeCompare(String(b.name), "de");
     const feld = filter.sort === "vorsprung" ? "aufwaerts" : "tag_wert";
@@ -417,7 +487,7 @@ function aktienSeite() {
   const liste = gefilterteAktien();
   if (!liste.length) {
     const leer = el("p", "leer");
-    text(leer, standJetzt.arbeitet ? "Die Kurse kommen." : "Keine Aktie für diesen Filter.");
+    text(leer, aktienZeilen().length ? "Keine Treffer für diesen Filter." : "Bestand fehlt. Der Filter kann nicht entscheiden.");
     block.append(leer);
     return block;
   }
@@ -696,7 +766,7 @@ function navigation() {
   });
   const status = el("p", "status");
   const papier = (standJetzt && standJetzt.papier) || {};
-  text(status, "Simulation. Kein echtes Geld. " + (papier.hinweis || ""));
+  text(status, verbindung === "verbunden" ? ("Simulation. Kein echtes Geld. " + (papier.hinweis || "")) : verbindung);
   nav.append(status);
   if (fokus) nav.querySelector(".aktiv") && nav.querySelector(".aktiv").focus();
 }
@@ -721,52 +791,167 @@ function zeichnen(stand) {
   }
 }
 
+let ladenLaeuft = false;
+
 async function laden() {
+  if (ladenLaeuft) return;
+  ladenLaeuft = true;
   try {
     const antwort = await fetch("/stand");
-    if (!antwort.ok) return;
+    if (!antwort.ok) {
+      verbindung = "Backend antwortet nicht";
+      if (standJetzt) zeichnen(standJetzt);
+      return;
+    }
     const roh = await antwort.text();
+    verbindung = "verbunden";
     if (roh === zuletzt) return;
     zuletzt = roh;
     zeichnen(JSON.parse(roh));
-  } catch (fehler) {}
+  } catch (fehler) {
+    verbindung = "Backend nicht erreichbar";
+    if (standJetzt) zeichnen(standJetzt);
+  } finally {
+    ladenLaeuft = false;
+  }
+}
+
+function suchfeld() { return document.getElementById("treffer"); }
+
+function oeffneSymbol(symbol) {
+  if (!bestand().some(function (eintrag) { return eintrag.symbol === symbol; })) merkeLokal(symbol, symbol, "");
+  const zeile = bestand().find(function (eintrag) { return eintrag.symbol === symbol; });
+  seite = zeile && zeile.bereich === "Krypto" ? "crypto" : "aktien";
+  detail = { art: "aktie", id: symbol };
+  suchfeld().className = "";
+  suchfeld().replaceChildren();
+  if (standJetzt) zeichnen(standJetzt);
+}
+
+function merkeLokal(symbol, name, bereich) {
+  if (!standJetzt) return;
+  if (!standJetzt.bestand) standJetzt.bestand = { zeilen: [] };
+  if (bestand().some(function (zeile) { return zeile.symbol === symbol; })) return;
+  standJetzt.bestand.zeilen.push({
+    symbol: symbol, name: name || symbol, bereich: bereich || "", lage: "ausstehend",
+    analyse: "ausstehend", preis: null, tag_wert: null, liste: true, reihe: null
+  });
+}
+
+async function zurListe(symbol, knopf, name) {
+  try {
+    const antwort = await fetch("/liste", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: symbol }) });
+    const daten = await antwort.json();
+    if (!antwort.ok || !daten.ok) {
+      text(knopf, daten.meldung || "Nicht hinzugefügt");
+      return;
+    }
+    merkeLokal(symbol, name, "");
+    text(knopf, daten.meldung === "vorhanden" ? "Schon auf der Liste" : "Zur Liste hinzugefügt");
+    knopf.disabled = true;
+  } catch (fehler) {
+    text(knopf, "Backend nicht erreichbar");
+  }
+}
+
+function suchzeile(symbol, name, markt, kurs, analyse, dabei) {
+  const block = el("div", "suchzeile");
+  const titel = el("strong");
+  text(titel, (name || symbol) + " · " + symbol);
+  block.append(titel, chip(markt || "Markt offen", ""), chip(kurs || LEER, ""), chip(analyseWort(analyse), analyse === "abgeschlossen" ? "plus" : "warn"));
+  const oeffnen = el("button");
+  oeffnen.type = "button";
+  text(oeffnen, "Öffnen");
+  oeffnen.addEventListener("click", function () { oeffneSymbol(symbol); });
+  const hinzu = el("button");
+  hinzu.type = "button";
+  text(hinzu, dabei ? "Auf der Liste" : "Zur Watchlist");
+  hinzu.disabled = !!dabei;
+  hinzu.addEventListener("click", function () { zurListe(symbol, hinzu, name); });
+  block.append(oeffnen, hinzu);
+  return block;
+}
+
+function suchliste() {
+  const feld = suchfeld();
+  const textWert = document.getElementById("suche").value.trim();
+  feld.replaceChildren();
+  if (textWert.length < 2) {
+    feld.className = "";
+    return;
+  }
+  feld.className = "offen";
+  const lokal = lokaleTreffer(bestand(), textWert);
+  lokal.forEach(function (zeile) {
+    feld.append(suchzeile(zeile.symbol, zeile.name, zeile.bereich, zeile.lage, zeile.analyse, zeile.liste));
+  });
+  if (!lokal.length) {
+    const hinweis = el("p", "leer");
+    text(hinweis, "Im geladenen Bestand kein Treffer. Die Kurssuche läuft.");
+    feld.append(hinweis);
+  }
+}
+
+async function sucheAussen(textWert) {
+  if (document.getElementById("suche").value.trim() !== textWert) return;
+  try {
+    const antwort = await fetch("/suche?q=" + encodeURIComponent(textWert));
+    const daten = await antwort.json();
+    if (!antwort.ok) {
+      const hinweis = el("p", "leer");
+      text(hinweis, daten.meldung || "Suche nicht erreichbar");
+      suchfeld().append(hinweis);
+      return;
+    }
+    const bekannt = new Set(lokaleTreffer(bestand(), textWert).map(function (zeile) { return zeile.symbol; }));
+    (daten.treffer || []).forEach(function (eintrag) {
+      if (bekannt.has(eintrag.symbol)) return;
+      const lokal = bestand().find(function (zeile) { return zeile.symbol === eintrag.symbol; });
+      suchfeld().append(suchzeile(
+        eintrag.symbol,
+        eintrag.name,
+        eintrag.boerse || eintrag.typ || "",
+        lokal ? lokal.lage : "nicht im Bestand",
+        lokal ? lokal.analyse : "ausstehend",
+        !!(lokal && lokal.liste)
+      ));
+    });
+    if (!suchfeld().querySelector(".suchzeile")) {
+      const hinweis = el("p", "leer");
+      text(hinweis, daten.meldung || "Nichts gefunden.");
+      suchfeld().append(hinweis);
+    }
+  } catch (fehler) {
+    const hinweis = el("p", "leer");
+    text(hinweis, "Backend nicht erreichbar");
+    suchfeld().append(hinweis);
+  }
 }
 
 document.getElementById("suche").addEventListener("input", function () {
-  if (seite !== "aktien" && seite !== "crypto" && seite !== "trader") seite = "aktien";
-  detail = null;
-  if (standJetzt) zeichnen(standJetzt);
+  suchliste();
+  clearTimeout(suchTimer);
+  const textWert = this.value.trim();
+  if (textWert.length < 2) return;
+  suchTimer = setTimeout(function () { sucheAussen(textWert); }, 350);
 });
-document.getElementById("finden").addEventListener("click", async function () {
-  const treffer = document.getElementById("treffer");
-  treffer.replaceChildren();
-  const antwort = await fetch("/suche?q=" + encodeURIComponent(document.getElementById("suche").value.trim()));
-  const daten = await antwort.json();
-  (daten.treffer || []).forEach(function (eintrag) {
-    const knopf = el("button");
-    knopf.type = "button";
-    text(knopf, eintrag.symbol + " · " + eintrag.name);
-    knopf.addEventListener("click", async function () {
-      await fetch("/liste", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: eintrag.symbol }) });
-      knopf.disabled = true;
-      text(knopf, eintrag.symbol + " ist auf der Liste");
-    });
-    treffer.append(knopf);
-  });
-  if (!treffer.childElementCount) {
-    const hinweis = el("p", "leer");
-    text(hinweis, daten.meldung || "Nichts gefunden.");
-    treffer.append(hinweis);
-  }
+document.getElementById("finden").addEventListener("click", function () {
+  const textWert = document.getElementById("suche").value.trim();
+  suchliste();
+  if (textWert.length >= 2) sucheAussen(textWert);
 });
 document.getElementById("neu").addEventListener("click", async function () {
   this.disabled = true;
   zuletzt = "";
-  try { await fetch("/neu"); } catch (fehler) {}
+  try { await fetch("/neu"); } catch (fehler) { verbindung = "Backend nicht erreichbar"; }
 });
 navigation();
 laden();
-setInterval(laden, 1000);
+setTimeout(function takt() {
+  laden().finally(function () {
+    setTimeout(takt, standJetzt && standJetzt.arbeitet ? 2000 : 5000);
+  });
+}, 2000);
 </script>
 </body>
 </html>

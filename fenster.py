@@ -288,6 +288,7 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
                 gesamt=anzahl_gesamt,
                 fertig=len(zeilen),
                 runde=anzahl_runde,
+                aktuell=name,
             )
 
         try:
@@ -354,7 +355,7 @@ def _papier_lauf(bild) -> None:
     bild.setzen(stand)
 
 
-def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0, fertig: int = 0, runde: int = 0) -> None:
+def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0, fertig: int = 0, runde: int = 0, aktuell: str = "") -> None:
     global _letzte_zeilen
     if zeilen:
         _letzte_zeilen = tuple(zeilen)
@@ -388,6 +389,15 @@ def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0
     stand["prognose_qualitaet"] = _prognose_qualitaet()
     stand["abdeckung"] = _abdeckung()
     stand["bestand"] = _bestand(moment)
+    stand["lauf"] = {
+        "arbeitet": bool(arbeitet),
+        "aktuell": aktuell,
+        "runde_fertig": int(fertig),
+        "runde_von": int(runde),
+        "gesamt": int(gesamt),
+        "naechste": None if arbeitet else int(naechste),
+        "letzte": (stand.get("bestand") or {}).get("letzte"),
+    }
     try:
         from papier import ansicht
 
@@ -494,15 +504,30 @@ def _prognose_qualitaet() -> dict:
         return {"status": "Nicht ausreichend Daten", "text": TEXT, "anzahl": 0, "erfolg": None, "brier": None}
 
 
+_BESTAND_CACHE = {"zeit": 0, "liste": (), "daten": {"zeilen": [], "universum": 0, "letzte": None}}
+
+
 def _bestand(moment) -> dict:
     from auswertung import bestand
     from universum import lade_universum
 
     try:
-        symbole, _hinweis = lade_universum(lade_liste(LISTE), _CACHE)
-        return bestand(DATENBANK, symbole, int(moment.timestamp()))
+        watchlist = tuple(lade_liste(LISTE))
+        jetzt = int(moment.timestamp())
+        if (
+            _BESTAND_CACHE["daten"].get("zeilen")
+            and _BESTAND_CACHE["liste"] == watchlist
+            and jetzt - int(_BESTAND_CACHE["zeit"]) < 15
+        ):
+            return _BESTAND_CACHE["daten"]
+        symbole, _hinweis = lade_universum(watchlist, _CACHE)
+        daten = bestand(DATENBANK, symbole, jetzt, watchlist)
+        _BESTAND_CACHE["zeit"] = jetzt
+        _BESTAND_CACHE["liste"] = watchlist
+        _BESTAND_CACHE["daten"] = daten
+        return daten
     except (OSError, sqlite3.Error, TypeError, ValueError):
-        return {"zeilen": [], "universum": 0}
+        return {"zeilen": [], "universum": 0, "letzte": None}
 
 
 def _abdeckung() -> dict:

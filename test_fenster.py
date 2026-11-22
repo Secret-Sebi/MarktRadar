@@ -94,8 +94,37 @@ class FensterTests(unittest.TestCase):
         urteil = Urteil("beobachten", 40, "Kein klarer Vorteil", "Grund.", "Prüfen.")
         self.assertEqual(bereich(Zeile("BTC-USD", "Bitcoin", "USD", 1, 1, urteil, None)), "Krypto")
         self.assertEqual(bereich(Zeile("NVDA", "NVIDIA", "USD", 1, 1, urteil, None)), "USA")
+        self.assertEqual(bereich(Zeile("BRK.B", "Berkshire", "USD", 1, 1, urteil, None)), "USA")
         etf = Zeile("VWCE.DE", "VWCE", "EUR", 1, 1, urteil, _Etf())
         self.assertEqual(bereich(etf), "ETFs")
+
+    def test_lokale_suche_findet_nvidia_ueber_name_und_kuerzel(self):
+        import subprocess
+        from pathlib import Path
+
+        quelle = Path("fenster_app/seite.html").read_text(encoding="utf-8")
+        funktion = quelle[quelle.index("function lokaleTreffer"):quelle.index("function dashboard")]
+        script = funktion + """
+        const zeilen = [
+          {symbol:"NVDA", name:"NVIDIA", bereich:"USA"},
+          {symbol:"SAP.DE", name:"SAP", bereich:"Deutschland"},
+          {symbol:"VWCE.DE", name:"VWCE", bereich:"ETFs"},
+          {symbol:"BTC-USD", name:"Bitcoin", bereich:"Krypto"}
+        ];
+        const name = lokaleTreffer(zeilen, "nvidia").map(function (zeile) { return zeile.symbol; });
+        if (name.join(",") !== "NVDA") throw new Error("name " + name.join(","));
+        const kuerzel = lokaleTreffer(zeilen, "nvda").map(function (zeile) { return zeile.symbol; });
+        if (kuerzel.join(",") !== "NVDA") throw new Error("kuerzel " + kuerzel.join(","));
+        const sap = lokaleTreffer(zeilen, "sap").map(function (zeile) { return zeile.symbol; });
+        if (sap.join(",") !== "SAP.DE") throw new Error("sap " + sap.join(","));
+        const etf = lokaleTreffer(zeilen, "vwce").map(function (zeile) { return zeile.bereich; });
+        if (etf.join(",") !== "ETFs") throw new Error("etf");
+        const coin = lokaleTreffer(zeilen, "bitcoin").map(function (zeile) { return zeile.symbol; });
+        if (coin.join(",") !== "BTC-USD") throw new Error("coin");
+        if (lokaleTreffer(zeilen, "kein-name-xyz").length !== 0) throw new Error("leer");
+        """
+        ergebnis = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(ergebnis.returncode, 0, ergebnis.stderr)
 
     def test_liste_nimmt_mehr_als_25_werte(self):
         import tempfile
