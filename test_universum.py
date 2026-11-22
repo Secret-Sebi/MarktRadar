@@ -20,6 +20,7 @@ from auswertung import (
     sichtbar,
 )
 from universum import (
+    abdeckung,
     lade_universum,
     naechste,
     parse_csv,
@@ -46,6 +47,17 @@ class UniversumTests(unittest.TestCase):
         mdax = "".join(f"<td>{chr(65 + index // 26)}{chr(65 + index % 26)}M</td></tr>" for index in range(40))
         self.assertEqual(parse_mdax(mdax)[0], "AAM.DE")
         self.assertEqual(len(parse_mdax(mdax)), 40)
+
+    def test_abdeckung_liest_gespeicherte_zahlen_und_erfindet_keine(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            cache = Path(ordner) / "universum.txt"
+            cache.write_text("# liquide\n# zahl DAX 10\n# fehlt Nasdaq 100\nAAPL\nAAPL\n", encoding="utf-8")
+            bild = abdeckung(cache)
+        self.assertEqual(bild["symbole"], 2)
+        self.assertEqual(bild["eindeutig"], 1)
+        self.assertEqual(bild["indizes"]["DAX"], 10)
+        self.assertIn("unvollständig", bild["hinweis"])
+        self.assertIn("Nasdaq 100", bild["hinweis"])
 
     def test_naechste_laeuft_rund(self):
         teil, cursor = naechste(("A", "B", "C"), 2, 2)

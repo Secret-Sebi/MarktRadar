@@ -198,7 +198,14 @@ def speichern(pfad: Path, symbol: str, meldungen: tuple[Meldung, ...]) -> int:
     pfad.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(pfad) as verbindung:
         _tabelle(verbindung)
+        bekannt = {
+            (_titel_norm(titel), int(zeit) // 86400, str(symbol_zeile))
+            for titel, zeit, symbol_zeile in verbindung.execute("SELECT titel, zeit, symbol FROM nachrichten")
+        }
         for meldung in meldungen:
+            schluessel = (_titel_norm(meldung.titel), int(meldung.zeit) // 86400, symbol)
+            if schluessel in bekannt:
+                continue
             art, ton, hinweis = einordnung(meldung.titel, meldung.quelle)
             cursor = verbindung.execute(
                 """
@@ -208,7 +215,13 @@ def speichern(pfad: Path, symbol: str, meldungen: tuple[Meldung, ...]) -> int:
                 (meldung.url, symbol, meldung.zeit, meldung.titel, meldung.quelle, meldung.kategorie, art, ton, hinweis),
             )
             neu += cursor.rowcount
+            if cursor.rowcount:
+                bekannt.add(schluessel)
     return neu
+
+
+def _titel_norm(titel: str) -> str:
+    return " ".join(str(titel or "").lower().split())
 
 
 def nachtragen(pfad: Path, symbol: str, balken, index_balken=None) -> int:
@@ -508,7 +521,7 @@ def _namenswort(name: str) -> str:
 
 
 def _wort(text: str, wort: str) -> bool:
-    if len(wort) < 3:
+    if len(wort) < 2:
         return False
     return re.search(rf"\b{re.escape(wort)}\b", text) is not None
 

@@ -59,13 +59,6 @@
     border: 1px solid rgba(61, 255, 154, .28); border-radius: 18px;
     box-shadow: inset 0 0 40px rgba(61, 255, 154, .05), 0 0 28px rgba(61, 255, 154, .08);
   }
-  #chat { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; min-height: 240px; flex: 1; }
-  #verlauf { flex: 1; overflow: auto; max-height: 320px; display: flex; flex-direction: column; gap: 8px; }
-  .blase { margin: 0; padding: 8px 10px; border-radius: 12px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; }
-  .blase.ich { align-self: flex-end; background: rgba(61, 255, 154, .16); }
-  .blase.sie { align-self: flex-start; background: rgba(233, 255, 244, .06); }
-  #frage { display: flex; gap: 8px; }
-  #satz { flex: 1; min-width: 0; background: rgba(5, 16, 12, .85); color: #e9fff4; border: 1px solid rgba(61, 255, 154, .4); border-radius: 999px; padding: 7px 12px; font: inherit; }
   .marke, h2 {
     margin: 0 0 12px; color: var(--gruen); font-size: 11px; letter-spacing: .18em; font-weight: 700;
   }
@@ -76,11 +69,9 @@
   #einschaetzung { margin: 12px 0 0; color: #d7f5e4; font-size: 13px; line-height: 1.45; }
   #papier { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
   #papier-modus { margin: 0; font-size: 12px; line-height: 1.4; }
-  .papier-knopf { display: flex; flex-wrap: wrap; gap: 8px; }
   #flaeche { min-width: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding-right: 4px; }
   #karten { overflow: visible; }
-  #papier-brett { display: none; }
-  body.alpaka #papier-brett { display: flex; flex-direction: column; gap: 14px; }
+  #papier-brett { display: flex; flex-direction: column; gap: 14px; }
   #papier-brett .breit { grid-column: 1 / -1; }
   #papier-brett button.breit { font: inherit; color: #e7fff4; background: #12362a; border: 1px solid #2f6d56; border-radius: 999px; padding: 8px 14px; cursor: pointer; justify-self: start; }
   .kontozeile { margin: 0; padding: 8px 0; border-bottom: 1px solid rgba(61, 255, 154, .16); font-size: 16px; }
@@ -118,7 +109,6 @@
     main { grid-template-columns: 1fr; height: auto; }
     .kpi-reihe { grid-template-columns: 1fr 1fr; }
   }
-  body.alpaka #karten { display: none; }
   .buch { padding: 16px; border-radius: 18px; border: 1px solid rgba(61, 255, 154, .28); background: rgba(6, 22, 16, .86); }
   .buch h2 { margin-bottom: 4px; }
   .buch .regel, .buch .bar, .nicht { margin: 6px 0 0; color: #8fb9a4; font-size: 12px; line-height: 1.4; }
@@ -232,21 +222,8 @@
     <p id="markt"></p>
     <section id="papier">
       <p class="marke">KI PAPER TRADING</p>
-      <p id="papier-modus">Simulation. Kein echtes Geld. Paper-Handel ist aus.</p>
-      <div class="papier-knopf">
-        <button id="papier-zeigen" type="button">Alpaka</button>
-        <button id="papier-an" type="button">Paper-Handel einschalten</button>
-        <button id="papier-stopp" type="button">Stopp</button>
-      </div>
+      <p id="papier-modus">Simulation. Kein echtes Geld.</p>
     </section>
-    <div id="chat">
-      <p class="marke">GESPRÄCH</p>
-      <div id="verlauf"></div>
-      <form id="frage">
-        <input id="satz" type="text" placeholder="Frag nach einem Namen" aria-label="Frage an MarktRadar" maxlength="500">
-        <button type="submit">Senden</button>
-      </form>
-    </div>
   </aside>
   <div id="flaeche">
     <section id="papier-brett"></section>
@@ -589,9 +566,7 @@ function papierZeichnen(papier) {
   const caret = fokus ? alt.selectionStart : null;
   window._papier = papier;
   papier = papier || {};
-  const schalter = document.getElementById("papier-an");
-  text(document.getElementById("papier-modus"), (papier.modus || "Simulation. Kein echtes Geld.") + " " + (papier.hinweis || "Paper-Handel ist aus."));
-  text(schalter, papier.automatisch ? "Paper-Handel ausschalten" : "Paper-Handel einschalten");
+  text(document.getElementById("papier-modus"), (papier.modus || "Simulation. Kein echtes Geld.") + " " + (papier.hinweis || ""));
   const brett = document.getElementById("papier-brett");
   brett.replaceChildren();
   plattformZeichnen(brett, papier);
@@ -609,7 +584,7 @@ function plattformZeichnen(brett, papier) {
   const nav = document.createElement("div");
   nav.className = "plattform-nav";
   [
-    ["dashboard", "Dashboard"], ["trader", "Alle Trader"], ["rangliste", "Rangliste"],
+    ["dashboard", "Dashboard"], ["krypto", "Krypto"], ["trader", "Alle Trader"], ["rangliste", "Rangliste"],
     ["meta", "Meta-KI"], ["performance", "Performance"], ["positionen", "Positionen"],
     ["historie", "Historie"], ["lernen", "Lernen"], ["validierung", "Validierung"],
     ["status", "Datenqualität"], ["konten", "Simulationskonten"]
@@ -625,6 +600,7 @@ function plattformZeichnen(brett, papier) {
   const inhalt = document.createElement("div");
   inhalt.className = "breit";
   if (blick === "dashboard") dashboardBlick(inhalt, stand, papier);
+  else if (blick === "krypto") cryptoBlick(inhalt, stand);
   else if (blick === "rangliste" || blick === "trader") tabelleBlick(inhalt, stand, blick === "trader");
   else if (blick === "meta") metaBlick(inhalt, stand);
   else if (blick === "performance") performanceBlick(inhalt, stand);
@@ -663,7 +639,7 @@ function dashboardBlick(block, stand, papier) {
   const reihe = document.createElement("div");
   reihe.className = "kpi-reihe";
   [
-    ["Start der eröffneten Bücher", zentrale.kapital, "Nur Bücher mit gespeichertem Stand. Je Trader 10.000 Euro Start."],
+    ["Start der eröffneten Bücher", zentrale.kapital, "Summe der gespeicherten Eröffnungen. Ein späterer Snapshot ist kein Start."],
     ["Equity", zentrale.equity, "Letzter gespeicherter Stand je eröffnetem Buch."],
     ["Cash", zentrale.cash, "Letzter gespeicherter Cash-Stand."],
     ["Realisiert", zentrale.realisiert, zentrale.erfolg || "Keine Daten"],
@@ -681,6 +657,10 @@ function dashboardBlick(block, stand, papier) {
     reihe.append(kpiKarte(eintrag[0], eintrag[1], eintrag[2], kpiKlasse(eintrag[1])));
   });
   block.append(reihe);
+  const lernsatz = document.createElement("p");
+  lernsatz.className = "regel";
+  text(lernsatz, stand.hinweis || "Die Trader handeln virtuell nach Regeln. Eine neue Version ersetzt die alte nur nach einer bestandenen Prüfung.");
+  block.append(lernsatz);
   zeitWahl(block);
   const aktualitaet = zentrale.aktualitaet || {};
   block.append(diagramm("Gesamt-Equity aller Trader", zentrale.gesamt, zentrale.hinweis));
@@ -791,6 +771,42 @@ function zeitWahl(block) {
   note.className = "regel";
   text(note, "Der Zeitraum filtert nur die Diagramme. Kennzahlen gelten für den gesamten gespeicherten Zeitraum.");
   block.append(note);
+}
+
+function cryptoBlick(block, stand) {
+  const satz = document.createElement("p");
+  satz.className = "regel";
+  text(satz, stand.krypto_hinweis || "Crypto ist ein eigener Bereich. Eine Wahrscheinlichkeit gibt es erst nach einer bestandenen Prüfung.");
+  block.append(satz);
+  const zentrale = stand.krypto || {};
+  const reihe = document.createElement("div");
+  reihe.className = "kpi-reihe";
+  [
+    ["Kapital", zentrale.kapital, "Nur eröffnete Krypto-Bücher."],
+    ["Equity", zentrale.equity, "Letzter Stand der Krypto-Bücher."],
+    ["Rendite", zentrale.rendite, "Gegen das gespeicherte Krypto-Startkapital."],
+    ["Success Rate", zentrale.erfolg, "Nur abgeschlossene Krypto-Trades."],
+    ["Drawdown", zentrale.drawdown, "Aus der Krypto-Kurve. Ein veralteter Stand ergibt kein Risiko-Prozent."]
+  ].forEach(function (eintrag) {
+    reihe.append(kpiKarte(eintrag[0], eintrag[1], eintrag[2], kpiKlasse(eintrag[1])));
+  });
+  block.append(reihe);
+  ["BTC-USD", "ETH-USD", "SOL-USD"].forEach(function (symbol) {
+    const karte = (standJetzt && standJetzt.karten || []).find(function (eintrag) { return eintrag.symbol === symbol; });
+    const zeile = document.createElement("p");
+    if (!karte || karte.datenstatus && karte.datenstatus !== "ok") {
+      text(zeile, symbol + ": Keine Daten. Fehlende oder veraltete Kurse sind kein Kauf.");
+    } else {
+      text(zeile, symbol + " " + (karte.preis || "Keine Daten") + " " + (karte.tag || "") + " · " + (karte.herkunft || "Quelle offen") + (karte.datenstatus ? " · " + karte.datenstatus : ""));
+    }
+    block.append(zeile);
+  });
+  (stand.rangliste || []).filter(function (zeile) { return zeile.markt === "krypto"; }).forEach(function (zeile) {
+    const eintrag = document.createElement("p");
+    text(eintrag, zeile.name + " · " + (zeile.einsatz ? "simuliert" : "pausiert") + " · " + (zeile.lernstatus || "") + " · Rendite " + (zeile.rendite || "Keine Daten") + " · " + (zeile.erfolg || "Keine Daten"));
+    block.append(eintrag);
+  });
+  block.append(diagramm("Krypto-Equity", (stand.krypto || {}).gesamt, (stand.krypto || {}).hinweis || "Getrennt von den Aktienbüchern."));
 }
 
 function tabelleBlick(block, stand, alle) {
@@ -941,7 +957,10 @@ function detailBlick(stand) {
   karten.append(kpiKarte("Version", String(zeile.version), zeile.lernstatus));
   karten.append(kpiKarte("Start", detail.start || "Keine Daten", "Gespeichertes Startkapital, keine nachträgliche Schätzung."));
   karten.append(kpiKarte("Equity", detail.hat_buch ? detail.equity : "Keine Daten", "Letzter Buchstand."));
-  karten.append(kpiKarte("Rendite", zeile.rendite, "Letzte Equity gegen 10.000 Euro Start."));
+  karten.append(kpiKarte("Rendite", zeile.rendite, "Letzte Equity gegen das gespeicherte Startkapital."));
+  karten.append(kpiKarte("30 Tage", zeile.rendite_30, "Nur wenn ein älterer Buchstand vorliegt."));
+  karten.append(kpiKarte("90 Tage", zeile.rendite_90, "Nur wenn ein älterer Buchstand vorliegt."));
+  karten.append(kpiKarte("180 Tage", zeile.rendite_180, "Nur wenn ein älterer Buchstand vorliegt."));
   karten.append(kpiKarte("Realisiert", zeile.realisiert_zahl == null ? "Keine Daten" : zeile.realisiert_zahl.toFixed(2), "Netto abgeschlossener Trades nach Gebühren."));
   karten.append(kpiKarte("Unrealisiert", zeile.unrealisiert_zahl == null ? "Keine Daten" : zeile.unrealisiert_zahl.toFixed(2), "Nur Positionen mit gemessenem Kurs. Ein fehlender Kurs ist keine 0."));
   karten.append(kpiKarte("Success Rate", zeile.erfolg, "Gewinnbringende abgeschlossene Trades geteilt durch alle gültigen."));
@@ -1138,30 +1157,6 @@ function kontoKarte(konto) {
   return karte;
 }
 
-async function papierSenden(inhalt) {
-  const schalter = document.getElementById("papier-an");
-  const stopp = document.getElementById("papier-stopp");
-  schalter.disabled = true;
-  stopp.disabled = true;
-  text(document.getElementById("papier-modus"), "Simulation. Kein echtes Geld. Schaltet …");
-  try {
-    const antwort = await fetch("/papier", { method: "POST", headers: { "Content-Type": "application/json", "X-MarktRadar": "1" }, body: JSON.stringify(inhalt) });
-    const daten = await antwort.json();
-    if (!standJetzt) standJetzt = {};
-    if (daten.papier) {
-      standJetzt.papier = daten.papier;
-      papierZeichnen(daten.papier);
-    } else {
-      text(document.getElementById("papier-modus"), "Simulation. Kein echtes Geld. " + (daten.meldung || "Hat nicht geklappt."));
-    }
-    zuletzt = "";
-  } catch (fehler) {
-    text(document.getElementById("papier-modus"), "Simulation. Kein echtes Geld. Die Schaltung hat den Server nicht erreicht.");
-  }
-  schalter.disabled = false;
-  stopp.disabled = false;
-}
-
 function zeichnen(stand) {
   standJetzt = stand;
   text(brief, stand.briefing);
@@ -1179,7 +1174,7 @@ function zeichnen(stand) {
   const stelle = karten.scrollTop;
   karten.replaceChildren();
   papierZeichnen(stand.papier || {});
-  karten.append(gelerntBlock(stand), erklaerungBlock(stand), nachrichtenBlock(stand));
+  karten.append(chancenBlock(stand), gelerntBlock(stand), erklaerungBlock(stand), nachrichtenBlock(stand));
   const alle = stand.karten || [];
   const leiste = filterleiste(alle);
   const kartenliste = alle.filter(passt);
@@ -1214,6 +1209,25 @@ function zeichnen(stand) {
     raster
   );
   karten.scrollTop = stelle;
+}
+
+function chancenBlock(stand) {
+  const abschnitt = document.createElement("section");
+  const kopf = document.createElement("h2");
+  text(kopf, "AKTIENCHANCEN");
+  const satz = document.createElement("p");
+  satz.className = "leer";
+  const qualitaet = stand.prognose_qualitaet || {};
+  const abdeckung = stand.abdeckung || {};
+  text(satz, (qualitaet.text || "Noch keine zuverlässige Prognose möglich") + (abdeckung.hinweis ? " " + abdeckung.hinweis : ""));
+  abschnitt.append(kopf, satz);
+  (stand.prognosen || []).slice(0, 8).forEach(function (zeile) {
+    const eintrag = document.createElement("p");
+    const chance = zeile.p_hoch == null ? "Noch keine zuverlässige Prognose möglich" : "Steigt " + zeile.p_hoch;
+    text(eintrag, zeile.symbol + " " + zeile.horizont + " " + zeile.art + ": " + (zeile.empfehlung || "KEINE AUSREICHENDE DATENBASIS") + ". " + chance);
+    abschnitt.append(eintrag);
+  });
+  return abschnitt;
 }
 
 function gelerntBlock(stand) {
@@ -1352,19 +1366,6 @@ async function laden() {
   } catch (fehler) {}
 }
 
-document.getElementById("papier-zeigen").addEventListener("click", function () {
-  const an = !document.body.classList.contains("alpaka");
-  document.body.classList.toggle("alpaka", an);
-  text(this, an ? "Zurück zu den Aktien" : "Alpaka");
-});
-document.getElementById("papier-an").addEventListener("click", function () {
-  const an = !(standJetzt && standJetzt.papier && standJetzt.papier.automatisch);
-  papierSenden({ automatisch: an, bestaetigung: an ? "PAPIER" : "", notfall: false });
-});
-document.getElementById("papier-stopp").addEventListener("click", function () {
-  papierSenden({ automatisch: false, bestaetigung: "", notfall: true });
-});
-
 knopf.addEventListener("click", async function () {
   knopf.disabled = true;
   knopf.textContent = "Schaut …";
@@ -1402,51 +1403,6 @@ document.getElementById("finden").addEventListener("click", async function () {
     });
     treffer.append(knopf);
   });
-});
-
-const verlauf = document.getElementById("verlauf");
-const schluessel = "marktradar-chat";
-
-function blase(rolle, inhalt) {
-  const satz = document.createElement("p");
-  satz.className = "blase " + rolle;
-  text(satz, inhalt);
-  verlauf.append(satz);
-  verlauf.scrollTop = verlauf.scrollHeight;
-}
-
-function merken(rolle, inhalt) {
-  blase(rolle, inhalt);
-  const alle = JSON.parse(localStorage.getItem(schluessel) || "[]");
-  alle.push({ rolle: rolle, inhalt: inhalt });
-  localStorage.setItem(schluessel, JSON.stringify(alle.slice(-40)));
-}
-
-JSON.parse(localStorage.getItem(schluessel) || "[]").forEach(function (eintrag) {
-  blase(eintrag.rolle, eintrag.inhalt);
-});
-if (!verlauf.childElementCount) {
-  blase("sie", "Hey. Ich bin da. Frag mich nach einem Namen, oder sag einfach Hallo.");
-}
-
-document.getElementById("frage").addEventListener("submit", async function (ereignis) {
-  ereignis.preventDefault();
-  const feld = document.getElementById("satz");
-  const satz = feld.value.trim();
-  if (!satz) return;
-  feld.value = "";
-  merken("ich", satz);
-  try {
-    const antwort = await fetch("/frage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: satz })
-    });
-    const daten = await antwort.json();
-    merken("sie", daten.antwort || "Ich habe gerade keine Antwort.");
-  } catch (fehler) {
-    merken("sie", "Die Verbindung zum Fenster ist gerade weg.");
-  }
 });
 
 laden();

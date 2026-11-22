@@ -85,10 +85,10 @@ def lade_universum(
     if frisch and fehlt:
         hinweis = f"{_NAME} Nicht geladen: {', '.join(fehlt)}."
     if not frisch:
-        geladen, fehler = _quellen(oeffnen)
+        geladen, fehler, zahlen = _quellen(oeffnen)
         if geladen:
             symbole = geladen
-            _schreib(cache, symbole, fehler)
+            _schreib(cache, symbole, fehler, zahlen)
         elif gespeichert:
             hinweis = f"{_NAME} Die Liste wurde nicht neu geladen, der gespeicherte Stand bleibt."
         else:
@@ -100,7 +100,7 @@ def lade_universum(
     return tuple(dict.fromkeys(tuple(watchlist) + tuple(symbole))), hinweis
 
 
-def _quellen(oeffnen) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _quellen(oeffnen) -> tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, int], ...]]:
     paare = (
         (_SP, parse_csv, "S&P 500"),
         (_DAX, parse_wiki_de, "DAX"),
@@ -109,17 +109,19 @@ def _quellen(oeffnen) -> tuple[tuple[str, ...], tuple[str, ...]]:
     )
     symbole: list[str] = []
     fehler: list[str] = []
+    zahlen: list[tuple[str, int]] = []
     for adresse, parser, name in paare:
         try:
             teil = parser(_holen(oeffnen, adresse))
         except (OSError, TimeoutError, ValueError, json.JSONDecodeError):
             fehler.append(name)
             continue
+        zahlen.append((name, len(teil)))
         if teil:
             symbole.extend(teil)
         else:
             fehler.append(name)
-    return tuple(dict.fromkeys(symbole)), tuple(fehler)
+    return tuple(dict.fromkeys(symbole)), tuple(fehler), tuple(zahlen)
 
 
 def _holen(oeffnen, adresse: str) -> str:
@@ -153,8 +155,44 @@ def _gueltig(symbole) -> tuple[str, ...]:
     return tuple(dict.fromkeys(symbol for symbol in symbole if gueltiges_symbol(symbol)))
 
 
-def _schreib(cache: Path, symbole: tuple[str, ...], fehler: tuple[str, ...]) -> None:
-    kopf = (_KOPF, *(f"# fehlt {name}" for name in fehler))
+_MINDEST = {"DAX": 40, "MDAX": 40, "S&P 500": 400, "Nasdaq 100": 90}
+
+
+def abdeckung(cache: Path) -> dict:
+    if not cache.exists():
+        return {"symbole": 0, "eindeutig": 0, "fehlt": [], "indizes": {}, "hinweis": "Keine gespeicherte Liste."}
+    zeilen = [zeile.strip() for zeile in cache.read_text(encoding="utf-8").splitlines() if zeile.strip()]
+    if not zeilen or zeilen[0] != _KOPF:
+        return {"symbole": 0, "eindeutig": 0, "fehlt": [], "indizes": {}, "hinweis": "Die gespeicherte Liste hat keinen gültigen Kopf."}
+    fehlt = [zeile[8:].strip() for zeile in zeilen if zeile.startswith("# fehlt ")]
+    indizes = {}
+    for zeile in zeilen:
+        if not zeile.startswith("# zahl "):
+            continue
+        teile = zeile.split()
+        if len(teile) < 4 or not teile[-1].isdigit():
+            continue
+        indizes[" ".join(teile[2:-1])] = int(teile[-1])
+    symbole = [zeile.upper() for zeile in zeilen if not zeile.startswith("#")]
+    hinweise = []
+    if not indizes:
+        hinweise.append("Zahl je Index ist nicht gespeichert.")
+    for name, mindest in _MINDEST.items():
+        if name in fehlt:
+            hinweise.append(f"{name} wurde nicht geladen.")
+        elif name in indizes and indizes[name] < mindest:
+            hinweise.append(f"{name} ist unvollständig: {indizes[name]}.")
+    return {
+        "symbole": len(symbole),
+        "eindeutig": len(set(symbole)),
+        "fehlt": fehlt,
+        "indizes": indizes,
+        "hinweis": " ".join(hinweise),
+    }
+
+
+def _schreib(cache: Path, symbole: tuple[str, ...], fehler: tuple[str, ...], zahlen: tuple[tuple[str, int], ...] = ()) -> None:
+    kopf = [_KOPF, *(f"# zahl {name} {zahl}" for name, zahl in zahlen), *(f"# fehlt {name}" for name in fehler)]
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text("\n".join((*kopf, *symbole)) + "\n", encoding="utf-8")
 

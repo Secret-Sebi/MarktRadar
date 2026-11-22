@@ -34,7 +34,9 @@ def antwort(frage: str, stand: dict) -> str:
     gespraech = _smalltalk(niedrig)
     if gespraech and not treffer:
         return gespraech
-    if any(wort in niedrig for wort in ("verkauf", "kaufen", "prüfen", "pruefen", "einstieg", "beste", "besten", "soll ich", "was soll")):
+    if any(wort in niedrig for wort in ("verkauf", "kaufen", "prüfen", "pruefen", "einstieg", "beste", "besten", "soll ich", "was soll")) or re.search(
+        r"\b(prognose|steigen|fallen|nächsten|naechsten)\b", niedrig
+    ):
         return _rat(niedrig, treffer, stand)
     karten = tuple(stand.get("karten") or ())
     if not karten and not treffer:
@@ -108,6 +110,11 @@ def _treffer(niedrig: str, stand: dict) -> tuple:
 
 
 def _rat(niedrig: str, treffer, stand: dict) -> str:
+    if re.search(r"\b(prognose|steigen|fallen|nächsten|naechsten)\b", niedrig) or "chancen-risiko" in niedrig or (
+        re.search(r"\b(bitcoin|ethereum|solana|btc|eth|sol)\b", niedrig)
+        and re.search(r"\b(prognose|steigen|fallen|nächsten|naechsten|tagen|woche)\b", niedrig)
+    ):
+        return _prognose_satz(stand)
     if "beste" in niedrig or "besten" in niedrig:
         wichtige = tuple(
             karte
@@ -124,6 +131,22 @@ def _rat(niedrig: str, treffer, stand: dict) -> str:
     if not treffer:
         return "Diesen Namen habe ich noch nicht ausgewertet. Ich erfinde keinen Vorschlag."
     return "Dazu passen mehrere Namen. Nenn einen davon, dann sage ich, was die Kurse hergeben."
+
+
+def _prognose_satz(stand: dict) -> str:
+    zeilen = tuple(stand.get("prognosen") or ())
+    belastbar = tuple(
+        zeile
+        for zeile in zeilen
+        if zeile.get("p_hoch") is not None and zeile.get("empfehlung") not in ("", "KEINE AUSREICHENDE DATENBASIS")
+    )
+    if not belastbar:
+        return "Noch keine zuverlässige Prognose möglich. Ich erfinde keine Wahrscheinlichkeit und keinen Kauf."
+    erste = belastbar[0]
+    return (
+        f"{erste.get('symbol')} {erste.get('horizont')} {erste.get('art')}: "
+        f"{erste.get('empfehlung')}. {erste.get('gruende') or ''} Das ist kein Auftrag."
+    )
 
 
 def _vorschlag(karte: dict) -> str:

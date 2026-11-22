@@ -384,6 +384,9 @@ def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0
         int(lernen.get("offen") or 0),
     )
     stand["erklaerung"] = _ERKLARUNG
+    stand["prognosen"] = _prognosen()
+    stand["prognose_qualitaet"] = _prognose_qualitaet()
+    stand["abdeckung"] = _abdeckung()
     try:
         from papier import ansicht
 
@@ -468,6 +471,35 @@ def _namen(stand: dict) -> dict[str, str]:
         for karte in stand.get("karten", ())
         if karte.get("symbol") and karte.get("name")
     }
+
+
+def _prognosen() -> list:
+    from beobachter import DATENBANK
+    from prognose import liste
+
+    try:
+        return liste(DATENBANK)
+    except (OSError, sqlite3.Error):
+        return []
+
+
+def _prognose_qualitaet() -> dict:
+    from beobachter import DATENBANK
+    from prognose import TEXT, qualitaet
+
+    try:
+        return qualitaet(DATENBANK)
+    except (OSError, sqlite3.Error):
+        return {"status": "Nicht ausreichend Daten", "text": TEXT, "anzahl": 0, "erfolg": None, "brier": None}
+
+
+def _abdeckung() -> dict:
+    from universum import abdeckung
+
+    try:
+        return abdeckung(_CACHE)
+    except OSError:
+        return {"hinweis": "Abdeckung ist nicht lesbar.", "symbole": 0, "eindeutig": 0, "fehlt": [], "indizes": {}}
 
 
 def _mit_lernen(stand: dict) -> dict:

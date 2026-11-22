@@ -56,9 +56,31 @@ def _umgebung_leer():
 
 class HaendlerTests(unittest.TestCase):
     def test_dreissig_trader_fuenfzehn_im_wettbewerb(self):
-        self.assertEqual(len(HAENDLER), 30)
-        self.assertEqual(sum(1 for haendler in HAENDLER if haendler.einsatz), 15)
-        self.assertEqual(len({haendler.name for haendler in HAENDLER}), 30)
+        self.assertEqual(len(HAENDLER), 37)
+        self.assertEqual(sum(1 for haendler in HAENDLER if haendler.einsatz), 21)
+        self.assertEqual(len({haendler.name for haendler in HAENDLER}), 37)
+        self.assertTrue(all(haendler.markt == "krypto" for haendler in HAENDLER if haendler.gruppe == "Krypto"))
+        self.assertFalse(next(haendler.einsatz for haendler in HAENDLER if haendler.name == "KryptoNachrichten"))
+
+    def test_krypto_bleibt_von_aktien_getrennt(self):
+        from haendler import von
+
+        ruhig = tuple(100 * (1.002 ** i) for i in range(40))
+        self.assertEqual(entscheide("Momentum", _zeile(ruhig))[0], "BUY")
+        self.assertEqual(entscheide("Momentum", _zeile(ruhig, "BTC-USD"))[0], "SKIP")
+        self.assertEqual(entscheide("KryptoMomentum", _zeile(ruhig, "BTC-USD"))[0], "HOLD")
+        self.assertEqual(entscheide("KryptoMomentum", _zeile(ruhig))[0], "SKIP")
+        self.assertIn("fehlt", entscheide("KryptoVolumen", _zeile(ruhig, "ETH-USD"))[1])
+        sol = _zeile(tuple(range(100, 160)), "SOL-USD")
+        self.assertEqual(entscheide("KryptoPhase", sol)[0], "SKIP")
+        sol.btc = tuple(200 - i for i in range(40))
+        self.assertEqual(entscheide("KryptoPhase", sol)[0], "HOLD")
+        self.assertEqual(entscheide("KryptoPhase", _zeile(tuple(range(100, 160)), "BTC-USD"))[0], "BUY")
+        coin = _zeile(ruhig, "ETH-USD")
+        coin.volumen = (1,) * 20 + (3,)
+        self.assertEqual(entscheide("KryptoVolumen", coin)[0], "BUY")
+        self.assertFalse(von("KryptoNachrichten").einsatz)
+        self.assertEqual(entscheide("KryptoNachrichten", _zeile(ruhig, "BTC-USD"))[0], "SKIP")
 
     def test_fehlende_daten_kaufen_nicht(self):
         self.assertEqual(entscheide("Momentum", _zeile(()))[0], "SKIP")
@@ -104,8 +126,13 @@ class HaendlerTests(unittest.TestCase):
             _lerne(pfad, "Momentum", (1.0, 0.0), 1.0, 0)
             _lerne(pfad, "RSI", (1.0, 0.0), 0.0, 0)
             with sqlite3.connect(pfad) as verbindung:
-                momentum = verbindung.execute("SELECT gewichte FROM ki_haendler_modell WHERE haendler = 'Momentum'").fetchone()[0]
-                rsi = verbindung.execute("SELECT gewichte FROM ki_haendler_modell WHERE haendler = 'RSI'").fetchone()[0]
+                momentum = verbindung.execute(
+                    "SELECT gewichte FROM ki_haendler_version WHERE haendler = 'Momentum' AND grund = 'Kandidat, nicht freigegeben'"
+                ).fetchone()[0]
+                rsi = verbindung.execute(
+                    "SELECT gewichte FROM ki_haendler_version WHERE haendler = 'RSI' AND grund = 'Kandidat, nicht freigegeben'"
+                ).fetchone()[0]
+                self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_haendler_modell").fetchone()[0], 0)
             self.assertNotEqual(momentum, rsi)
             self.assertEqual(lies_modell(pfad).beispiele, 0)
             self.assertTrue(zurueck(pfad, "Momentum", 1))
@@ -180,9 +207,13 @@ class HaendlerTests(unittest.TestCase):
             _lerne(pfad, "RSI", (1.0,), 0.0, 0)
             with sqlite3.connect(pfad) as verbindung:
                 momentum = verbindung.execute("SELECT beispiele FROM ki_haendler_modell WHERE haendler = 'Momentum'").fetchone()[0]
-                rsi = verbindung.execute("SELECT beispiele FROM ki_haendler_modell WHERE haendler = 'RSI'").fetchone()[0]
+                rsi = verbindung.execute("SELECT beispiele FROM ki_haendler_modell WHERE haendler = 'RSI'").fetchone()
+                kandidat = verbindung.execute(
+                    "SELECT COUNT(*) FROM ki_haendler_version WHERE haendler = 'RSI' AND grund = 'Kandidat, nicht freigegeben'"
+                ).fetchone()[0]
             self.assertEqual(momentum, 12)
-            self.assertEqual(rsi, 1)
+            self.assertIsNone(rsi)
+            self.assertEqual(kandidat, 1)
 
     def test_fehlgeschlagener_verkauf_wird_kein_lernfall(self):
         from haendler import _fall_offen, _schliessen, _tabellen, von
@@ -243,8 +274,10 @@ class HaendlerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as ordner:
             pfad = Path(ordner) / "markt.sqlite"
             bild = uebersicht(pfad)
-            self.assertEqual(len(_PROFIL), 30)
-            self.assertEqual(bild["aktiv"], 15)
+            self.assertEqual(len(_PROFIL), 37)
+            self.assertEqual(bild["aktiv"], 21)
+            self.assertEqual(bild["krypto_beste"], "noch keine ausreichende Stichprobe")
+            self.assertIn("Krypto", bild["krypto_hinweis"])
             self.assertEqual(bild["belastbar"], 0)
             self.assertTrue(all(zeile["quelle"] == "simulation" and zeile["ergebnis"] == "Keine Daten" for zeile in bild["rangliste"]))
             self.assertEqual(bild["meta_bericht"]["phasen"]["phase"], "nicht gemessen")
@@ -260,11 +293,14 @@ class HaendlerTests(unittest.TestCase):
             basis_pruefen()
 
     def test_gesamt_equity_ist_die_summe_und_nicht_der_erste_trader(self):
+        from haendler import kapital_buchen
         from papier import _tabellen as papier_tabellen
 
         with tempfile.TemporaryDirectory() as ordner:
             pfad = Path(ordner) / "markt.sqlite"
             papier_tabellen(pfad)
+            self.assertTrue(kapital_buchen(pfad, "Momentum", Decimal(10000), "eroeffnung", "2026-11-22T10:00:00+00:00"))
+            self.assertTrue(kapital_buchen(pfad, "RSI", Decimal(10000), "eroeffnung", "2026-11-22T10:00:00+00:00"))
             with sqlite3.connect(pfad) as verbindung:
                 verbindung.execute(
                     "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-11-22T10:00:00+00:00', 'Momentum')"
@@ -291,12 +327,13 @@ class HaendlerTests(unittest.TestCase):
     def test_drawdown_behaelt_die_fruehe_senke_und_die_grenze_ist_strenger(self):
         import math
 
-        from haendler import _untere_grenze
+        from haendler import _untere_grenze, kapital_buchen
         from papier import _tabellen as papier_tabellen
 
         with tempfile.TemporaryDirectory() as ordner:
             pfad = Path(ordner) / "markt.sqlite"
             papier_tabellen(pfad)
+            self.assertTrue(kapital_buchen(pfad, "Momentum", Decimal(10000), "eroeffnung", "2026-11-20T00:00:00+00:00"))
             with sqlite3.connect(pfad) as verbindung:
                 verbindung.execute(
                     "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-11-20T00:00:00+00:00', 'Momentum')"
@@ -470,6 +507,13 @@ class HaendlerTests(unittest.TestCase):
             self.assertLess(bericht["pruef_ab"], bericht["test_ab"])
             with sqlite3.connect(pfad) as verbindung:
                 self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_haendler_modell").fetchone()[0], 0)
+                merkmal = verbindung.execute("SELECT merkmale FROM ki_haendler_fall ORDER BY id LIMIT 1").fetchone()[0]
+            from haendler import uebernehmen_wenn_besser
+
+            self.assertTrue(uebernehmen_wenn_besser(pfad, "Momentum"))
+            with sqlite3.connect(pfad) as verbindung:
+                self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_haendler_modell").fetchone()[0], 1)
+                self.assertEqual(verbindung.execute("SELECT merkmale FROM ki_haendler_fall ORDER BY id LIMIT 1").fetchone()[0], merkmal)
 
     def test_neues_buch_und_anderes_startkapital_sind_kein_gewinn(self):
         from haendler import kapital_buchen
@@ -522,6 +566,36 @@ class HaendlerTests(unittest.TestCase):
             self.assertEqual(alt, "10000")
             frisch = uebersicht(pfad)["zentrale"]
             self.assertEqual(frisch["gesamt"][1]["wert"], 8000.0)
+
+    def test_snapshot_ohne_eroeffnung_ist_kein_startkapital(self):
+        from haendler import _tabellen, kapital_buchen
+        from papier import _tabellen as papier_tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            papier_tabellen(pfad)
+            _tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '14000', '14000', '10000', '', '', '2026-11-22T10:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    """
+                    INSERT INTO ki_haendler_kapital (haendler, delta, basis, art, zeit)
+                    VALUES ('Momentum', '14000.00', '14000.00', 'erster Stand', '2026-11-22T10:00:00+00:00')
+                    """
+                )
+            bild = uebersicht(pfad)["zentrale"]
+            self.assertEqual(bild["kapital"], "Keine Daten")
+            self.assertEqual(bild["rendite"], "Keine Daten")
+            self.assertEqual(bild["drawdown"], "Nicht ausreichend Daten")
+            with sqlite3.connect(pfad) as verbindung:
+                arten = {zeile[0] for zeile in verbindung.execute("SELECT art FROM ki_haendler_kapital")}
+            self.assertEqual(arten, {"erster Stand"})
+            self.assertTrue(kapital_buchen(pfad, "Momentum", Decimal(10000), "eroeffnung", "2026-11-22T09:00:00+00:00"))
+            self.assertTrue(kapital_buchen(pfad, "Momentum", Decimal(5000), "einzahlung", "2026-11-22T12:00:00+00:00"))
+            self.assertTrue(kapital_buchen(pfad, "Momentum", Decimal(1000), "einzahlung", "2026-11-22T11:00:00+00:00"))
+            self.assertEqual(uebersicht(pfad)["zentrale"]["kapital"], "16000.00")
 
     def test_fehlende_positionsdaten_bleiben_unvollstaendig(self):
         from papier import _tabellen as papier_tabellen

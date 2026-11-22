@@ -123,6 +123,11 @@ class GespraechTests(unittest.TestCase):
     def test_leere_liste(self):
         self.assertIn("noch nicht da", antwort("SAP", {"karten": ()}))
 
+    def test_prognosefrage_erfindet_keine_wahrscheinlichkeit(self):
+        text = antwort("Was passiert wahrscheinlich mit NVIDIA in den nächsten 7 Tagen?", {"karten": (_SAP,)})
+        self.assertIn("Noch keine zuverlässige Prognose", text)
+        self.assertNotIn("%", text)
+
     def test_server_antwortet(self):
         server = mach_server(_Bild({"karten": (_SAP,)}))
         self.addCleanup(server.shutdown)

@@ -10,11 +10,11 @@ from collections.abc import Sequence
 
 from analyse import de_prozent, kennzahlen_aus_schluessen, setup_aus_kennzahlen
 
-HORIZONTE = (1, 3, 5, 20, 60)
+HORIZONTE = (1, 3, 5, 10, 20, 60)
 VORSICHTIG = 30
 BELASTBAR = 60
 KOSTEN = 0.25
-VERSION = 3
+VERSION = 4
 
 
 def als_json(bild: dict) -> str:

@@ -10,7 +10,7 @@ import json
 import math
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from analyse import rsi, sma
@@ -56,7 +56,14 @@ HAENDLER: tuple[Haendler, ...] = (
     Haendler("Quartal", "Nachrichten", "mittel", "aktie", False, "Eine Quartalsmeldung ist kein Auftrag."),
     Haendler("Makro", "Nachrichten", "mittel", "alle", False, "Eine Makromeldung ist kein Kaufgrund."),
     Haendler("Termin", "Nachrichten", "kurz", "alle", False, "Es ist kein Terminkalender gespeichert."),
-    Haendler("Krypto", "Markt", "kurz", "krypto", True, "Nur Krypto, und nur mit positivem 20-Tage-Momentum."),
+    Haendler("Krypto", "Krypto", "mittel", "krypto", True, "Nur Krypto. Kauf nur über dem 20- und dem 50-Tage-Schnitt und nach einem Anstieg von mindestens 8 Prozent in 20 Tagen."),
+    Haendler("KryptoMomentum", "Krypto", "kurz", "krypto", True, "Nur Krypto. Kauf nur nach mindestens 12 Prozent in 5 Tagen und einem positiven 20-Tage-Verlauf."),
+    Haendler("KryptoVolumen", "Krypto", "kurz", "krypto", True, "Nur Krypto. Kauf nur, wenn das Volumen vorliegt und der letzte Tag mindestens doppelt so hoch ist wie der Median der 20 Tage davor."),
+    Haendler("KryptoNachrichten", "Krypto", "kurz", "krypto", False, "Eine Krypto-Meldung ist kein Kaufgrund."),
+    Haendler("KryptoTechnik", "Krypto", "kurz", "krypto", True, "Nur Krypto. Kauf nur bei RSI 45 bis 60, MACD über der Signallinie und Schluss über dem 20-Tage-Schnitt."),
+    Haendler("KryptoVolatil", "Krypto", "kurz", "krypto", True, "Nur Krypto. Kauf nur bei Tagesstreuung zwischen 2 und 6 Prozent. Darüber wird nicht gekauft."),
+    Haendler("KryptoPhase", "Krypto", "mittel", "krypto", True, "Nur Krypto. Altcoins nur, wenn Bitcoin über 20 Tage nicht fällt. Ein Tagessturz über 8 Prozent stoppt den Kauf."),
+    Haendler("KryptoExperiment", "Krypto", "mittel", "krypto", True, "Nur Krypto. Kauf nur, wenn Trend, Volatilitätsband und Marktphase gleichzeitig passen."),
     Haendler("ETF", "Markt", "lang", "etf", True, "Nur ETFs, und nur beim Rücksetzer über dem langen Schnitt."),
     Haendler("Large", "Markt", "lang", "aktie", False, "Die Marktkapitalisierung fehlt. Die Indexliste ist kein Größenmaß."),
     Haendler("Small", "Markt", "lang", "aktie", False, "Die Marktkapitalisierung fehlt. Keine Small-Cap-Auswahl."),
@@ -90,7 +97,14 @@ _PROFIL = {
     "Quartal": {"daten": "Eine Quartalsmeldung.", "merkmale": "Kein Merkmal.", "fehlt": "Quartalsmeldungen begründen keinen Kauf."},
     "Makro": {"daten": "Eine Makromeldung.", "merkmale": "Kein Merkmal.", "fehlt": "Makromeldungen begründen keinen Kauf."},
     "Termin": {"daten": "Ein gespeicherter Terminkalender.", "merkmale": "Kein Merkmal.", "fehlt": "Es gibt keinen Terminkalender."},
-    "Krypto": {"daten": "Schlusskurse eines *-USD-Namens.", "merkmale": "Dieselben Momentum-Merkmale.", "fehlt": ""},
+    "Krypto": {"daten": "Mindestens 50 Krypto-Schlusskurse.", "merkmale": "Lage zum 20- und 50-Tage-Schnitt und 20-Tage-Rendite.", "fehlt": ""},
+    "KryptoMomentum": {"daten": "Mindestens 21 Krypto-Schlusskurse.", "merkmale": "Rendite über 5 und über 20 Tage.", "fehlt": ""},
+    "KryptoVolumen": {"daten": "Mindestens 21 positive Volumenwerte.", "merkmale": "Letztes Volumen gegen den Median.", "fehlt": "Ohne Volumen kein Kauf."},
+    "KryptoNachrichten": {"daten": "Eine Meldung zum Coin.", "merkmale": "Kein Merkmal. Eine Meldung ist kein Kauf.", "fehlt": "Nachrichten begründen keinen Kauf."},
+    "KryptoTechnik": {"daten": "RSI, MACD und 20 Schlüsse.", "merkmale": "RSI, MACD-Abstand und Lage zum kurzen Schnitt.", "fehlt": ""},
+    "KryptoVolatil": {"daten": "Tagesstreuung aus Schlüssen.", "merkmale": "Gemessene Streuung.", "fehlt": ""},
+    "KryptoPhase": {"daten": "Eigene Schlüsse und bei Altcoins die Bitcoin-Reihe.", "merkmale": "20-Tage-Rendite und Bitcoin-Richtung.", "fehlt": "Ohne Bitcoin-Reihe kein Altcoin-Kauf."},
+    "KryptoExperiment": {"daten": "Trend, Streuung und Marktphase gleichzeitig.", "merkmale": "Drei eigenen Krypto-Regeln.", "fehlt": ""},
     "ETF": {"daten": "Schlusskurse eines ETF.", "merkmale": "Dieselben Rücksetzer-Merkmale.", "fehlt": ""},
     "Large": {"daten": "Marktkapitalisierung.", "merkmale": "Kein Merkmal.", "fehlt": "Die Marktkapitalisierung fehlt."},
     "Small": {"daten": "Marktkapitalisierung.", "merkmale": "Kein Merkmal.", "fehlt": "Die Marktkapitalisierung fehlt."},
@@ -118,6 +132,8 @@ def entscheide(name: str, zeile, schluesse: tuple[float, ...] | None = None) -> 
     klasse = _klasse(zeile)
     if haendler.markt != "alle" and klasse != haendler.markt:
         return "SKIP", f"{haendler.name} handelt nur {haendler.markt}.", None
+    if klasse == "krypto" and haendler.markt != "krypto":
+        return "SKIP", f"{haendler.name} handelt keine Kryptowährung.", None
     funktion = _REGELN[name]
     return funktion(zeile, reihe)
 
@@ -241,9 +257,13 @@ def uebersicht(pfad) -> dict:
     zeilen.sort(key=lambda zeile: (0 if zeile["belastbar"] else 1, -zeile["score"], zeile["name"]))
     for nummer, zeile in enumerate((zeile for zeile in zeilen if zeile["belastbar"]), start=1):
         zeile["platz"] = nummer
-    bewertbar = [zeile for zeile in zeilen if zeile["belastbar"]]
+    aktien = [zeile for zeile in zeilen if zeile["markt"] != "krypto"]
+    krypto = [zeile for zeile in zeilen if zeile["markt"] == "krypto"]
+    bewertbar = [zeile for zeile in aktien if zeile["belastbar"]]
+    krypto_bewertbar = [zeile for zeile in krypto if zeile["belastbar"]]
     beste = max(bewertbar, key=lambda zeile: zeile["score"])["name"] if bewertbar else "noch keine ausreichende Stichprobe"
     schwach = min(bewertbar, key=lambda zeile: zeile["score"])["name"] if bewertbar else "noch keine ausreichende Stichprobe"
+    krypto_beste = max(krypto_bewertbar, key=lambda zeile: zeile["score"])["name"] if krypto_bewertbar else "noch keine ausreichende Stichprobe"
     lernzeit = _letzte_lernzeit(pfad)
     return {
         "anzahl": len(HAENDLER),
@@ -252,13 +272,25 @@ def uebersicht(pfad) -> dict:
         "beste": beste,
         "schwaechste": schwach,
         "lernen": lernzeit or "noch kein abgeschlossener Lernfall",
-        "hinweis": "Simulation, getrennt vom Alpaca-Buch und vom öffentlichen Modell. Unter 20 abgeschlossenen Fällen gibt es keinen Sieger.",
+        "hinweis": (
+            "Jeder aktive Trader hat ein eigenes virtuelles Buch und führt seine Regel als Simulation aus. "
+            "Ein Gewichtsschritt wird gespeichert, ersetzt die Regel aber erst nach einer bestandenen Prüfung auf späteren Fällen. "
+            "Unter 20 abgeschlossenen Fällen gibt es keinen Sieger. "
+            "Crypto wird nicht mit Aktien nach der Rendite verglichen."
+        ),
         "ohne_daten": sum(1 for haendler in HAENDLER if not haendler.einsatz),
         "belastbar": len(bewertbar),
+        "krypto_beste": krypto_beste,
+        "krypto_hinweis": (
+            "Eigene Krypto-Regeln, eigenes virtuelles Buch. "
+            "Spread und Slippage sind nicht gemessen. "
+            "Eine neue Version ersetzt die alte nur nach einer Prüfung auf späteren Fällen."
+        ),
         "meta": _meta(zeilen),
         "meta_bericht": _meta_bericht(pfad, zeilen),
         "rangliste": zeilen,
-        "zentrale": _zentrale(pfad, zeilen),
+        "zentrale": _zentrale(pfad, aktien),
+        "krypto": _zentrale(pfad, krypto),
     }
 
 
@@ -286,7 +318,7 @@ def zurueck(pfad, name: str, version: int) -> bool:
 
 
 def anpassen(pfad, name: str = "Adaptiv") -> str:
-    """Ändert eine Schwelle nur, wenn die letzten Fälle die früheren schlagen."""
+    """Eine Schwelle bleibt, bis eine Prüfung auf späteren Fällen sie freigibt."""
     _tabellen(pfad)
     with sqlite3.connect(pfad) as verbindung:
         faelle = verbindung.execute(
@@ -295,25 +327,7 @@ def anpassen(pfad, name: str = "Adaptiv") -> str:
         ).fetchall()
     if len(faelle) < 30:
         return "Zu wenige abgeschlossene Fälle. Schwelle bleibt."
-    erste = [float(zeile[0]) > 0 for zeile in faelle[:20]]
-    letzte = [float(zeile[0]) > 0 for zeile in faelle[-10:]]
-    if sum(letzte) / len(letzte) <= sum(erste) / len(erste):
-        return "Die letzten Fälle sind nicht besser. Schwelle bleibt."
-    with sqlite3.connect(pfad) as verbindung:
-        alt = verbindung.execute(
-            "SELECT wert FROM ki_haendler_parameter WHERE haendler = ? AND schluessel = 'rsi'",
-            (name,),
-        ).fetchone()
-        wert = 45.0 if alt is None else float(alt[0])
-        neu = max(30.0, wert - 1.0)
-        verbindung.execute(
-            """
-            INSERT INTO ki_haendler_parameter (haendler, schluessel, wert) VALUES (?, 'rsi', ?)
-            ON CONFLICT(haendler, schluessel) DO UPDATE SET wert = excluded.wert
-            """,
-            (name, neu),
-        )
-    return f"RSI-Schwelle von {wert:.0f} auf {neu:.0f}. Nur wegen der späteren Fälle."
+    return "Schwelle bleibt. Ohne bestandene Prüfung auf späteren Fällen ändert sich nichts."
 
 
 def _momentum(_zeile, reihe: tuple[float, ...]):
@@ -494,10 +508,153 @@ def _termin(_zeile, _reihe):
     return "SKIP", "Es ist kein Terminkalender gespeichert. Kein Kauf.", None
 
 
+_KRYPTO_TREND = 0.08
+_KRYPTO_STOSS = 0.12
+_KRYPTO_STURZ = -0.08
+_KRYPTO_VOL_UNTEN = 0.02
+_KRYPTO_VOL_OBEN = 0.06
+_KRYPTO_VOLUMEN = 2.0
+
+
+def _nur_krypto(zeile):
+    if _klasse(zeile) != "krypto":
+        return "SKIP", "Das ist kein Krypto-Name. Die Krypto-Regel kauft hier nicht.", None
+    return None
+
+
+def _krypto_btc(zeile) -> tuple[float, ...] | None:
+    roh = _feld(zeile, "btc")
+    if not isinstance(roh, (list, tuple)):
+        return None
+    werte = tuple(float(wert) for wert in roh if isinstance(wert, (int, float)) and not isinstance(wert, bool) and wert > 0)
+    return werte if len(werte) >= 21 else None
+
+
 def _krypto(zeile, reihe):
-    if not str(_feld(zeile, "symbol") or "").upper().endswith("-USD"):
-        return "SKIP", "Das ist kein Krypto-Name.", None
-    return _momentum(zeile, reihe)
+    tor = _nur_krypto(zeile)
+    if tor is not None:
+        return tor
+    kurz = sma(reihe, 20)
+    lang = sma(reihe, 50)
+    if kurz is None or lang is None or len(reihe) < 21 or reihe[-21] <= 0:
+        return "SKIP", "Für den Krypto-Trend fehlen 50 Schlüsse. Kein Kauf.", None
+    zwanzig = reihe[-1] / reihe[-21] - 1
+    merkmale = (zwanzig, reihe[-1] / lang - 1)
+    if reihe[-1] > kurz > lang and zwanzig >= _KRYPTO_TREND:
+        return "BUY", "Krypto-Aufwärtstrend über beiden Schnitten.", merkmale
+    if reihe[-1] < lang:
+        return "SELL", "Der Schluss liegt unter dem 50-Tage-Schnitt.", merkmale
+    return "HOLD", "Kein Krypto-Trend. Kein Kauf.", merkmale
+
+
+def _krypto_momentum(zeile, reihe):
+    tor = _nur_krypto(zeile)
+    if tor is not None:
+        return tor
+    if len(reihe) < 21 or reihe[-21] <= 0 or reihe[-6] <= 0:
+        return "SKIP", "Zu wenige Schlüsse für das Krypto-Momentum. Kein Kauf.", None
+    funf = reihe[-1] / reihe[-6] - 1
+    zwanzig = reihe[-1] / reihe[-21] - 1
+    merkmale = (funf, zwanzig)
+    if funf >= _KRYPTO_STOSS and zwanzig > 0:
+        return "BUY", "Ungewöhnlich starkes Krypto-Momentum.", merkmale
+    return "HOLD", "Die Bewegung reicht für das Krypto-Momentum nicht.", merkmale
+
+
+def _krypto_volumen(zeile, reihe):
+    tor = _nur_krypto(zeile)
+    if tor is not None:
+        return tor
+    roh = _feld(zeile, "volumen")
+    if not isinstance(roh, (list, tuple)):
+        return "SKIP", "Handelsvolumen fehlt. Kein Kauf.", None
+    werte = [float(wert) for wert in roh if isinstance(wert, (int, float)) and not isinstance(wert, bool) and wert > 0]
+    if len(werte) < 21 or len(reihe) < 6 or reihe[-6] <= 0:
+        return "SKIP", "Volumen oder Kursreihe ist unvollständig. Kein Kauf.", None
+    basis = sorted(werte[-21:-1])
+    median = basis[len(basis) // 2]
+    if median <= 0:
+        return "SKIP", "Das Vergleichsvolumen fehlt. Kein Kauf.", None
+    merkmale = (werte[-1] / median,)
+    if werte[-1] >= median * _KRYPTO_VOLUMEN and reihe[-1] > reihe[-6]:
+        return "BUY", "Das Volumen liegt mindestens doppelt so hoch, und der Kurs steht über dem Stand vor 5 Tagen.", merkmale
+    return "HOLD", "Volumen oder Kursrichtung passen nicht.", merkmale
+
+
+def _krypto_nachrichten(zeile, _reihe):
+    tor = _nur_krypto(zeile)
+    if tor is not None:
+        return tor
+    return "SKIP", "Eine Krypto-Meldung ist kein Kaufgrund.", None
+
+
+def _krypto_technik(zeile, reihe):
+    tor = _nur_krypto(zeile)
+    if tor is not None:
+        return tor
+    wert = rsi(reihe, 14) if len(reihe) >= 15 else None
+    linie = macd_rechnung(reihe)
+    kurz = sma(reihe, 20)
+    if wert is None or linie is None or kurz is None or linie[0] is None or linie[1] is None:
+        return "SKIP", "RSI, MACD oder der kurze Schnitt fehlt. Kein Kauf.", None
+    macd_linie, signal = linie
+    merkmale = (wert / 100.0, macd_linie - signal)
+    if 45 <= wert <= 60 and macd_linie > signal and reihe[-1] > kurz:
+        return "BUY", "RSI, MACD und kurzer Schnitt passen zusammen.", merkmale
+    if macd_linie < signal:
+        return "SELL", "Die MACD-Linie liegt unter der Signallinie.", merkmale
+    return "HOLD", "Die technische Krypto-Regel ist nicht ausgelöst.", merkmale
+
+
+def _krypto_volatil(zeile, reihe):
+    tor = _nur_krypto(zeile)
+    if tor is not None:
+        return tor
+    wert = volatilitaet_rechnung(reihe)
+    if wert is None:
+        return "SKIP", "Die Krypto-Streuung fehlt. Kein Kauf.", None
+    merkmale = (wert,)
+    if _KRYPTO_VOL_UNTEN <= wert <= _KRYPTO_VOL_OBEN:
+        return "BUY", "Die Schwankung liegt im mittleren Band.", merkmale
+    return "HOLD", "Die Schwankung ist zu hoch oder zu niedrig für diese Regel.", merkmale
+
+
+def _krypto_phase(zeile, reihe):
+    tor = _nur_krypto(zeile)
+    if tor is not None:
+        return tor
+    if len(reihe) < 21 or reihe[-21] <= 0 or reihe[-2] <= 0:
+        return "SKIP", "Für die Marktphase fehlen Schlüsse. Kein Kauf.", None
+    zwanzig = reihe[-1] / reihe[-21] - 1
+    tag = reihe[-1] / reihe[-2] - 1
+    lang = sma(reihe, 50)
+    if lang is None:
+        return "SKIP", "Der 50-Tage-Schnitt fehlt. Kein Kauf.", None
+    symbol = str(_feld(zeile, "symbol") or "").upper()
+    if symbol != "BTC-USD":
+        bitcoin = _krypto_btc(zeile)
+        if bitcoin is None:
+            return "SKIP", "Die Bitcoin-Reihe fehlt. Kein Altcoin-Kauf.", None
+        if bitcoin[-1] / bitcoin[-21] - 1 < 0:
+            return "HOLD", "Bitcoin fällt über 20 Tage. Kein Altcoin-Kauf.", (zwanzig,)
+    if tag <= _KRYPTO_STURZ:
+        return "HOLD", "Tagessturz. Kein Kauf.", (zwanzig, tag)
+    if reihe[-1] > lang and zwanzig > 0:
+        return "BUY", "Bullenphase ohne Tagessturz.", (zwanzig, tag)
+    if reihe[-1] < lang and zwanzig < 0:
+        return "SELL", "Bärenphase.", (zwanzig, tag)
+    return "HOLD", "Seitwärts. Kein Kauf.", (zwanzig, tag)
+
+
+def _krypto_experiment(zeile, reihe):
+    trend = _krypto(zeile, reihe)
+    schwankung = _krypto_volatil(zeile, reihe)
+    phase = _krypto_phase(zeile, reihe)
+    if any(stimme[0] == "SKIP" for stimme in (trend, schwankung, phase)):
+        return "SKIP", "Trend, Streuung oder Marktphase fehlt. Kein Kauf.", None
+    if trend[0] == "BUY" and schwankung[0] == "BUY" and phase[0] == "BUY":
+        return "BUY", "Trend, mittleres Schwankungsband und Bullenphase liegen zusammen.", (1.0,)
+    return "HOLD", "Die experimentelle Kombination ist nicht vollständig.", (0.0,)
 
 
 def _etf(zeile, reihe):
@@ -595,6 +752,13 @@ _REGELN = {
     "Makro": _makro,
     "Termin": _termin,
     "Krypto": _krypto,
+    "KryptoMomentum": _krypto_momentum,
+    "KryptoVolumen": _krypto_volumen,
+    "KryptoNachrichten": _krypto_nachrichten,
+    "KryptoTechnik": _krypto_technik,
+    "KryptoVolatil": _krypto_volatil,
+    "KryptoPhase": _krypto_phase,
+    "KryptoExperiment": _krypto_experiment,
     "ETF": _etf,
     "Large": _large,
     "Small": _small,
@@ -715,15 +879,52 @@ def _fall_zu(pfad, name: str, symbol: str, position: dict, preis: Decimal) -> No
 
 
 def _lerne(pfad, name: str, merkmale: tuple[float, ...], ziel: float, fall: int) -> None:
+    """Speichert einen Kandidaten. Das aktive Modell bleibt, bis eine spätere Prüfung es freigibt."""
     from ki import Modell, schritt
 
+    if not merkmale:
+        return
+    live = _modell_lesen(pfad, name)
+    if live is None:
+        basis = ((0.0,) * len(merkmale), 0.0, 0, 1)
+        grund = "Start, nicht eingesetzt"
+    elif len(live[0]) != len(merkmale):
+        return
+    else:
+        basis = live
+        grund = "Aktives Modell vor dem Kandidaten"
+    neu = schritt(Modell(basis[0], basis[1], basis[2]), merkmale, ziel)
     with sqlite3.connect(pfad) as verbindung:
-        aktuell = _modell(verbindung, name, len(merkmale))
-        if len(aktuell[0]) != len(merkmale):
-            return
-        _version_schreiben(verbindung, name, aktuell[3], json.dumps(aktuell[0]), aktuell[1], aktuell[2], "vor dem Lernschritt")
-        neu = schritt(Modell(aktuell[0], aktuell[1], aktuell[2]), merkmale, ziel)
-        version = aktuell[3] + 1
+        _version_schreiben(verbindung, name, basis[3], json.dumps(basis[0]), basis[1], basis[2], grund)
+        _version_schreiben(
+            verbindung,
+            name,
+            basis[3] + 1,
+            json.dumps(list(neu.gewichte)),
+            neu.bias,
+            neu.beispiele,
+            "Kandidat, nicht freigegeben",
+        )
+        if fall:
+            verbindung.execute("UPDATE ki_haendler_fall SET gelernt = 1 WHERE id = ?", (fall,))
+    uebernehmen_wenn_besser(pfad, name)
+
+
+def uebernehmen_wenn_besser(pfad, name: str) -> bool:
+    """Schreibt das Trainingsmodell nur, wenn die Prüfung auf späteren Fällen besteht."""
+    bericht = pruefe(pfad, name)
+    gewichte = bericht.get("gewichte")
+    if not bericht.get("besser") or not gewichte:
+        return False
+    with sqlite3.connect(pfad) as verbindung:
+        live = verbindung.execute(
+            "SELECT version, gewichte FROM ki_haendler_modell WHERE haendler = ?",
+            (name,),
+        ).fetchone()
+        text = json.dumps(list(gewichte))
+        if live is not None and live[1] == text:
+            return False
+        version = 1 if live is None else int(live[0]) + 1
         verbindung.execute(
             """
             INSERT INTO ki_haendler_modell (haendler, gewichte, bias, beispiele, version, zeit)
@@ -732,10 +933,18 @@ def _lerne(pfad, name: str, merkmale: tuple[float, ...], ziel: float, fall: int)
                 gewichte = excluded.gewichte, bias = excluded.bias,
                 beispiele = excluded.beispiele, version = excluded.version, zeit = excluded.zeit
             """,
-            (name, json.dumps(neu.gewichte), neu.bias, neu.beispiele, version, _jetzt()),
+            (name, text, float(bericht.get("bias") or 0.0), int(bericht.get("beispiele") or 0), version, _jetzt()),
         )
-        _version_schreiben(verbindung, name, version, json.dumps(neu.gewichte), neu.bias, neu.beispiele, "Lernschritt aus abgeschlossenem Fall")
-        verbindung.execute("UPDATE ki_haendler_fall SET gelernt = 1 WHERE id = ?", (fall,))
+        _version_schreiben(
+            verbindung,
+            name,
+            version,
+            text,
+            float(bericht.get("bias") or 0.0),
+            int(bericht.get("beispiele") or 0),
+            "Freigegeben auf späteren Testfällen",
+        )
+    return True
 
 
 def _kosten(einstieg: Decimal, ausstieg: Decimal, menge: Decimal) -> tuple[Decimal, Decimal, Decimal, Decimal]:
@@ -825,6 +1034,9 @@ def _zeile(pfad, haendler: Haendler) -> dict:
         "ergebnis": rechnung["ergebnis_text"],
         "ergebnis_zahl": rechnung["realisiert"],
         "rendite": _rendite(pfad, haendler.name),
+        "rendite_30": _fenster_rendite(pfad, haendler.name, 30),
+        "rendite_90": _fenster_rendite(pfad, haendler.name, 90),
+        "rendite_180": _fenster_rendite(pfad, haendler.name, 180),
         "drawdown": _KENNZAHL if dd is None else f"{dd:.1%}",
         "sharpe": sharpe,
         "sortino": sortino,
@@ -987,6 +1199,7 @@ def _serie(netto: list[Decimal]) -> str:
 
 
 def _zentrale(pfad, zeilen: list[dict]) -> dict:
+    namen = {zeile["name"] for zeile in zeilen}
     trades = sum(zeile["trades"] for zeile in zeilen)
     treffer = sum(zeile["treffer_zahl"] or 0 for zeile in zeilen)
     gewinn_summe = sum(zeile["gewinn_summe"] for zeile in zeilen if zeile["gewinn_summe"] is not None)
@@ -1004,10 +1217,12 @@ def _zentrale(pfad, zeilen: list[dict]) -> dict:
         punkte = (zeile.get("detail") or {}).get("punkte") or []
         if len(punkte) >= 2:
             kurven.append({"name": zeile["name"], "punkte": punkte})
-    verlauf = _gesamt_verlauf(pfad)
+    verlauf = _gesamt_verlauf(pfad, namen)
     gesamt = verlauf["punkte"]
-    buecher = _letzte_buecher(pfad)
-    kapital = _kapital_summe(pfad)
+    buecher = _letzte_buecher(pfad, namen)
+    staende = _kapital_staende(pfad)
+    kapital_werte = [staende[name] for name in namen if name in staende]
+    kapital = sum((Decimal(str(wert)) for wert in kapital_werte), Decimal(0)) if kapital_werte else None
     equity = None if not buecher or any(buch["equity"] is None for buch in buecher) else sum(buch["equity"] for buch in buecher)
     cash = None if not buecher or any(buch["cash"] is None for buch in buecher) else sum(buch["cash"] for buch in buecher)
     rendite = None if kapital is None or equity is None or kapital <= 0 else (equity / kapital - 1) * 100
@@ -1030,7 +1245,7 @@ def _zentrale(pfad, zeilen: list[dict]) -> dict:
         "offen": sum(len((zeile.get("detail") or {}).get("offen") or []) for zeile in zeilen),
         "kurven": kurven,
         "gesamt": gesamt[-500:],
-        "realisiert_punkte": _realisiert_punkte(pfad),
+        "realisiert_punkte": _realisiert_punkte(pfad, namen),
         "aktualitaet": _aktualitaet(pfad, buecher, kurs_fehlt),
         "hinweis": (
             "Die gezeichnete Kurve lässt neue Bücher und Einzahlungen weg. Die Equity-Zahl bleibt die Summe der Bücher. "
@@ -1043,10 +1258,12 @@ def _zentrale(pfad, zeilen: list[dict]) -> dict:
     }
 
 
-def _letzte_buecher(pfad) -> list[dict]:
+def _letzte_buecher(pfad, nur: set[str] | None = None) -> list[dict]:
     if not pfad.exists():
         return []
     namen = {haendler.name for haendler in HAENDLER}
+    if nur is not None:
+        namen &= set(nur)
     with sqlite3.connect(pfad) as verbindung:
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if "paper_konto" not in tabellen:
@@ -1068,6 +1285,8 @@ def _letzte_buecher(pfad) -> list[dict]:
 
 
 _REBASE = {"zuruecksetzen", "wiederherstellung", "schliessen"}
+_KAPITAL_ABSOLUT = {"eroeffnung", "zuruecksetzen", "wiederherstellung"}
+_KAPITAL_FLUSS = {"einzahlung", "auszahlung"}
 
 
 def kapital_buchen(pfad, name: str, betrag: Decimal, art: str, zeit: str) -> bool:
@@ -1078,10 +1297,13 @@ def kapital_buchen(pfad, name: str, betrag: Decimal, art: str, zeit: str) -> boo
         return False
     with sqlite3.connect(pfad) as verbindung:
         vorhanden = verbindung.execute(
-            "SELECT id, basis FROM ki_haendler_kapital WHERE haendler = ? ORDER BY zeit, id",
+            "SELECT id, basis, art FROM ki_haendler_kapital WHERE haendler = ? ORDER BY zeit, id",
             (name,),
         ).fetchall()
-        if art in {"eroeffnung", "erster Stand"} and vorhanden:
+        arten = {str(zeile[2]) for zeile in vorhanden}
+        if art == "erster Stand" and vorhanden:
+            return False
+        if art == "eroeffnung" and "eroeffnung" in arten:
             return False
         aktuell = Decimal(0) if not vorhanden else (_zahl(vorhanden[-1][1]) or Decimal(0))
         if art == "schliessen":
@@ -1121,85 +1343,85 @@ def _hat_kontozeile(pfad, name: str) -> bool:
 
 
 def _kapital_nachziehen(pfad) -> None:
-    """Erster gemessener Stand wird einmal als Kapital gespeichert. Nichts wird überschrieben."""
+    """Legt die Tabelle an. Ein späterer Kontostand ist kein Startkapital."""
     if not pfad.exists():
         return
     _tabellen(pfad)
+
+
+def _kapital_anwenden(basis: float | None, art: str, absolut: float, delta: float) -> float | None:
+    if art == "erster Stand":
+        return basis
+    if art in _KAPITAL_ABSOLUT:
+        return absolut
+    if art == "schliessen":
+        return 0.0
+    if art in _KAPITAL_FLUSS:
+        return (0.0 if basis is None else basis) + delta
+    return basis
+
+
+def _kapital_ereignisse(pfad) -> dict[str, list[tuple]]:
+    if not pfad.exists():
+        return {}
+    _kapital_nachziehen(pfad)
     namen = {haendler.name for haendler in HAENDLER}
     with sqlite3.connect(pfad) as verbindung:
-        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        if "paper_konto" not in tabellen:
-            return
-        belegt = {str(zeile[0]) for zeile in verbindung.execute("SELECT DISTINCT haendler FROM ki_haendler_kapital")}
         zeilen = verbindung.execute(
-            """
-            SELECT konto, equity, zeit, id FROM paper_konto
-            WHERE broker = 'Lokal' ORDER BY id
-            """
+            "SELECT id, haendler, basis, delta, art, zeit FROM ki_haendler_kapital ORDER BY zeit, id"
         ).fetchall()
-    erste: dict[str, tuple] = {}
-    for konto, equity, zeit, nummer in zeilen:
-        if konto not in namen or konto in belegt or konto in erste:
+    gruppen: dict[str, list[tuple]] = {}
+    for nummer, name, basis, delta, art, zeit in zeilen:
+        stempel = _zeit_lesen(zeit)
+        absolut = _zahl(basis)
+        fluss = _zahl(delta)
+        if name not in namen or stempel is None or absolut is None or fluss is None:
             continue
-        if _zahl(equity) is None or _zeit_lesen(zeit) is None:
+        gruppen.setdefault(str(name), []).append((stempel, float(absolut), str(art), int(nummer), float(fluss)))
+    return gruppen
+
+
+def _kapital_staende(pfad) -> dict[str, float]:
+    staende = {}
+    for name, serie in _kapital_ereignisse(pfad).items():
+        if not any(eintrag[2] == "eroeffnung" for eintrag in serie):
             continue
-        erste[str(konto)] = (equity, zeit, nummer)
-    for name, (equity, zeit, _nummer) in erste.items():
-        kapital_buchen(pfad, name, _zahl(equity) or Decimal(0), "erster Stand", str(zeit))
+        basis = None
+        for _stempel, absolut, art, _nummer, delta in serie:
+            basis = _kapital_anwenden(basis, art, absolut, delta)
+        if basis is not None and basis > 0:
+            staende[name] = basis
+    return staende
 
 
 def _basis_name(pfad, name: str) -> Decimal | None:
-    if not pfad.exists():
+    wert = _kapital_staende(pfad).get(name)
+    if wert is None:
         return None
-    _kapital_nachziehen(pfad)
-    with sqlite3.connect(pfad) as verbindung:
-        zeile = verbindung.execute(
-            "SELECT basis FROM ki_haendler_kapital WHERE haendler = ? ORDER BY zeit, id DESC LIMIT 1",
-            (name,),
-        ).fetchone()
-    if zeile is None:
-        return None
-    return _zahl(zeile[0])
+    return Decimal(str(wert))
 
 
 def _kapital_summe(pfad) -> Decimal | None:
-    if not pfad.exists():
+    staende = _kapital_staende(pfad)
+    if not staende:
         return None
-    _kapital_nachziehen(pfad)
-    namen = {haendler.name for haendler in HAENDLER}
-    with sqlite3.connect(pfad) as verbindung:
-        zeilen = verbindung.execute(
-            """
-            SELECT haendler, basis FROM ki_haendler_kapital
-            WHERE id IN (SELECT MAX(id) FROM ki_haendler_kapital GROUP BY haendler)
-            """
-        ).fetchall()
-    summe = Decimal(0)
-    gesehen = False
-    for name, basis in zeilen:
-        zahl = _zahl(basis)
-        if name not in namen or zahl is None or zahl <= 0:
-            continue
-        summe += zahl
-        gesehen = True
-    return summe if gesehen else None
+    return sum((Decimal(str(wert)) for wert in staende.values()), Decimal(0))
 
 
-def _gesamt_verlauf(pfad) -> dict:
+def _gesamt_verlauf(pfad, nur: set[str] | None = None) -> dict:
     leer = {"punkte": [], "drawdown": None, "veraltet": False, "unvollstaendig": False, "hinweis": ""}
     if not pfad.exists():
         return leer
     _kapital_nachziehen(pfad)
     namen = {haendler.name for haendler in HAENDLER}
+    if nur is not None:
+        namen &= set(nur)
     with sqlite3.connect(pfad) as verbindung:
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if "paper_konto" not in tabellen:
             return leer
         kontozeilen = verbindung.execute(
             "SELECT id, konto, equity, zeit FROM paper_konto WHERE broker = 'Lokal' ORDER BY id"
-        ).fetchall()
-        kapitalzeilen = verbindung.execute(
-            "SELECT id, haendler, basis, art, zeit FROM ki_haendler_kapital ORDER BY id"
         ).fetchall()
     staende: dict[str, list[tuple]] = {}
     for nummer, konto, equity, zeit in kontozeilen:
@@ -1208,13 +1430,8 @@ def _gesamt_verlauf(pfad) -> dict:
         if konto not in namen or stempel is None or zahl is None:
             continue
         staende.setdefault(str(konto), []).append((stempel, str(zeit), float(zahl), int(nummer)))
-    bewegungen: dict[str, list[tuple]] = {}
-    for nummer, name, basis, art, zeit in kapitalzeilen:
-        stempel = _zeit_lesen(zeit)
-        zahl = _zahl(basis)
-        if name not in namen or stempel is None or zahl is None:
-            continue
-        bewegungen.setdefault(str(name), []).append((stempel, float(zahl), str(art), int(nummer)))
+    bewegungen = {name: serie for name, serie in _kapital_ereignisse(pfad).items() if name in namen}
+    eroeffnet = {name for name, serie in bewegungen.items() if any(eintrag[2] == "eroeffnung" for eintrag in serie)}
     zeiten = sorted({eintrag[0] for serie in list(staende.values()) + list(bewegungen.values()) for eintrag in serie})
     zeiger_stand = {name: 0 for name in staende}
     zeiger_kapital = {name: 0 for name in bewegungen}
@@ -1241,12 +1458,15 @@ def _gesamt_verlauf(pfad) -> dict:
         for name, serie in bewegungen.items():
             index = zeiger_kapital[name]
             while index < len(serie) and serie[index][0] <= zeit:
-                basis_jetzt[name] = serie[index][1]
-                if serie[index][0] == zeit and serie[index][2] in _REBASE:
+                _stempel, absolut, art, _nummer, delta = serie[index]
+                basis_jetzt[name] = _kapital_anwenden(basis_jetzt.get(name), art, absolut, delta)
+                if serie[index][0] == zeit and art in _REBASE:
                     rebase = True
                 index += 1
             zeiger_kapital[name] = index
-        aktiv = [name for name, basis in basis_jetzt.items() if basis > 0]
+        if any(name not in eroeffnet for name in equity_jetzt):
+            unvollstaendig = True
+        aktiv = [name for name, basis in basis_jetzt.items() if basis is not None and basis > 0 and name in eroeffnet]
         if any(name not in equity_jetzt for name in aktiv):
             unvollstaendig = True
             continue
@@ -1292,8 +1512,10 @@ def _gesamt_verlauf(pfad) -> dict:
     if len(punkte) < 2:
         drawdown = None
     letzte = _zeit_lesen(punkte[-1]["zeit"]) if punkte else None
-    veraltet = letzte is not None and (datetime.now(timezone.utc) - letzte).total_seconds() > 10 * 24 * 3600  # noqa: UP017
-    hinweis = "Kontostand älter als 10 Tage. Der Drawdown ist deshalb kein aktueller Risikowert." if veraltet else ""
+    krypto_namen = {haendler.name for haendler in HAENDLER if haendler.markt == "krypto"}
+    tag_grenze = 2 if namen and namen <= krypto_namen else 10
+    veraltet = letzte is not None and (datetime.now(timezone.utc) - letzte).total_seconds() > tag_grenze * 24 * 3600  # noqa: UP017
+    hinweis = f"Kontostand älter als {tag_grenze} Tage. Der Drawdown ist deshalb kein aktueller Risikowert." if veraltet else ""
     if unvollstaendig:
         hinweis = "Mindestens ein Buch hat Kapital ohne Equity-Stand. " + hinweis
     return {"punkte": punkte, "drawdown": drawdown, "veraltet": veraltet, "unvollstaendig": unvollstaendig, "hinweis": hinweis}
@@ -1303,10 +1525,12 @@ def _gesamt_punkte(pfad) -> list[dict]:
     return _gesamt_verlauf(pfad)["punkte"]
 
 
-def _realisiert_punkte(pfad) -> list[dict]:
+def _realisiert_punkte(pfad, nur: set[str] | None = None) -> list[dict]:
     if not pfad.exists():
         return []
     namen = {haendler.name for haendler in HAENDLER}
+    if nur is not None:
+        namen &= set(nur)
     with sqlite3.connect(pfad) as verbindung:
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if "ki_haendler_fall" not in tabellen:
@@ -1388,11 +1612,17 @@ def _zeit_lesen(wert) -> datetime | None:
 
 
 def _meta(zeilen: list[dict]) -> str:
-    belastbar = [zeile for zeile in zeilen if zeile["belastbar"]]
-    if not belastbar:
-        return "Noch keine Marktphasen und kein Sieger. Dafür fehlen je Trader mindestens 20 abgeschlossene Fälle mit positivem unterem Rand."
-    namen = ", ".join(zeile["name"] for zeile in sorted(belastbar, key=lambda zeile: zeile["score"], reverse=True)[:3])
-    return f"Nur diese Trader haben eine ausreichende Stichprobe: {namen}. Der höchste Gewinn allein reicht nicht."
+    aktien = [zeile for zeile in zeilen if zeile["markt"] != "krypto" and zeile["belastbar"]]
+    krypto = [zeile for zeile in zeilen if zeile["markt"] == "krypto" and zeile["belastbar"]]
+    if not aktien:
+        text = "Noch keine Marktphasen und kein Sieger. Dafür fehlen je Trader mindestens 20 abgeschlossene Fälle mit positivem unterem Rand."
+    else:
+        namen = ", ".join(zeile["name"] for zeile in sorted(aktien, key=lambda zeile: zeile["score"], reverse=True)[:3])
+        text = f"Nur diese Trader haben eine ausreichende Stichprobe: {namen}. Der höchste Gewinn allein reicht nicht."
+    if not krypto:
+        return text + " Kein Crypto-Trader hat diese Stichprobe."
+    crypto_namen = ", ".join(zeile["name"] for zeile in sorted(krypto, key=lambda zeile: zeile["score"], reverse=True)[:3])
+    return text + f" Crypto getrennt: {crypto_namen}."
 
 
 def _quoten_aus_equity(pfad, name: str) -> tuple[str, str]:
@@ -1497,11 +1727,24 @@ def _version(pfad, name: str) -> int:
 
 
 def _lernstatus(pfad, name: str) -> str:
-    modell = _modell_lesen(pfad, name)
-    if modell is None or modell[2] < _ZUVERLAESSIG:
-        zahl = 0 if modell is None else modell[2]
-        return f"{zahl} Fälle, nicht zuverlässig"
-    return f"{modell[2]} Fälle, Version {modell[3]}"
+    pruefung = _letzte_pruefung(pfad, name)
+    if pruefung.get("besser"):
+        return f"Version {_version(pfad, name)} ist auf späteren Fällen freigegeben."
+    return "Regelbasiert. Gespeicherte Gewichtsschritte sind nicht freigegeben."
+
+
+def _fenster_rendite(pfad, name: str, tage: int) -> str:
+    punkte = _equity_punkte(pfad, name)
+    if len(punkte) < 2:
+        return "Keine Daten"
+    ende = _zeit_lesen(punkte[-1]["zeit"])
+    if ende is None:
+        return "Keine Daten"
+    ziel = ende - timedelta(days=tage)
+    vorher = [punkt for punkt in punkte if (stempel := _zeit_lesen(punkt["zeit"])) is not None and stempel <= ziel]
+    if not vorher or not vorher[-1]["equity"]:
+        return "Keine Daten"
+    return f"{(punkte[-1]['equity'] / vorher[-1]['equity'] - 1) * 100:.1f} %"
 
 
 def _detail(pfad, name: str) -> dict:
@@ -1823,6 +2066,7 @@ def pruefe(pfad, name: str) -> dict:
         f"{benchmark_text} Spread und Slippage sind für beide nicht gemessen. "
         "Sharpe nicht ausreichend Daten. Aktives Modell unverändert."
     )
+    bericht_gewichte = list(modell.gewichte) if besser else None
     bericht = {
         "besser": besser,
         "status": status,
@@ -1832,6 +2076,9 @@ def pruefe(pfad, name: str) -> dict:
         "train_bis": training[-1]["id"],
         "pruef_ab": validierung[0]["id"],
         "test_ab": test[0]["id"],
+        "gewichte": bericht_gewichte,
+        "bias": modell.bias if besser else None,
+        "beispiele": modell.beispiele if besser else None,
     }
     _pruefung_speichern(pfad, name, bericht)
     return bericht
@@ -1967,7 +2214,11 @@ def _meta_bericht(pfad, zeilen: list[dict]) -> dict:
     phasen = _phasen(pfad)
     belastbar = [
         zeile for zeile in zeilen
-        if zeile["belastbar"] and (zeile.get("detail") or {}).get("pruefung", {}).get("besser")
+        if zeile["belastbar"] and (zeile.get("detail") or {}).get("pruefung", {}).get("besser") and zeile["markt"] != "krypto"
+    ]
+    krypto_belastbar = [
+        zeile for zeile in zeilen
+        if zeile["belastbar"] and (zeile.get("detail") or {}).get("pruefung", {}).get("besser") and zeile["markt"] == "krypto"
     ]
     if belastbar:
         summe = sum(max(zeile["score"], 0.0) for zeile in belastbar) or 1.0
@@ -1976,6 +2227,12 @@ def _meta_bericht(pfad, zeilen: list[dict]) -> dict:
     else:
         gewichte = {}
         hinweis = "Keine Gewichtung. Dafür fehlt eine bestandene unabhängige Prüfung. Risikogrenzen bleiben."
+    if krypto_belastbar:
+        summe = sum(max(zeile["score"], 0.0) for zeile in krypto_belastbar) or 1.0
+        krypto_gewichte = {zeile["name"]: round(max(zeile["score"], 0.0) / summe, 2) for zeile in krypto_belastbar}
+    else:
+        krypto_gewichte = {}
+        hinweis += " Crypto bleibt ohne Gewichtung, bis eine eigene Prüfung besteht."
     schwaechen = [
         {"name": zeile["name"], "grund": zeile["fehlt"] or "Stichprobe oder unterer Rand reicht nicht."}
         for zeile in zeilen
@@ -1984,6 +2241,7 @@ def _meta_bericht(pfad, zeilen: list[dict]) -> dict:
     bericht = {
         "phasen": phasen,
         "gewichte": gewichte,
+        "krypto_gewichte": krypto_gewichte,
         "hinweis": hinweis,
         "schwaechen": schwaechen[:8],
         "unzuverlaessig": [zeile["name"] for zeile in zeilen if not zeile["belastbar"]],

@@ -9,6 +9,7 @@ from analyse import BERLIN, de_zahl, handels_hinweis
 from analyse import fenster as handelsfenster
 from ansicht import briefing, einzelheiten, kurzname, lage, potenzial
 from beobachter import _kurs_prozent, _preis, _sortiert, _warte_text
+from muster import VERSION as MUSTER_VERSION
 
 _SEITE = Path(__file__).resolve().parent / "fenster_app" / "seite.html"
 _PILLE = {
@@ -99,7 +100,7 @@ def _karte(zeile) -> dict:
         "aufwaerts": _aufwaerts(zeile),
         "fenster_faelle": _fenster_faelle(zeile),
         "muster": _muster_text(zeile),
-        "muster_version": 3 if getattr(zeile, "muster", None) else None,
+        "muster_version": MUSTER_VERSION if getattr(zeile, "muster", None) else None,
         "vorschlag": _vorschlag_text(zeile),
         "horizonte": list((getattr(zeile, "muster", None) or {}).get("horizonte") or []),
         "qualitaet": str((getattr(zeile, "muster", None) or {}).get("qualitaet") or ""),
