@@ -175,6 +175,8 @@ def runde(pfad, zeilen, namen: set[str], kurs, jetzt: datetime, nur_verkauf: boo
         from papier import _jetzt_merken
 
         _sleeve, cash, _equity = _lokales_guthaben(pfad, name)
+        if not _hat_kontozeile(pfad, name):
+            kapital_buchen(pfad, name, _START, "eroeffnung", jetzt.isoformat())
         bestand = _positionen(pfad, name)
         eigene = {str(zeile["symbol"]) for zeile in bestand}
         sperre = kauf_gesperrt(cash + _marktwert(pfad, name), *_spitze_konto(pfad, name, cash + _marktwert(pfad, name)), len(eigene))
@@ -232,6 +234,7 @@ def runde(pfad, zeilen, namen: set[str], kurs, jetzt: datetime, nur_verkauf: boo
 
 def uebersicht(pfad) -> dict:
     _tabellen(pfad)
+    _kapital_nachziehen(pfad)
     zeilen = []
     for haendler in HAENDLER:
         zeilen.append(_zeile(pfad, haendler))
@@ -855,9 +858,10 @@ def _zeile(pfad, haendler: Haendler) -> dict:
 
 def _rendite_zahl(pfad, name: str) -> float | None:
     werte = _equity_reihe(pfad, name)
-    if not werte or _START <= 0:
+    basis = _basis_name(pfad, name)
+    if not werte or basis is None or basis <= 0:
         return None
-    return (werte[-1] / float(_START) - 1) * 100
+    return (werte[-1] / float(basis) - 1) * 100
 
 
 def _unrealisiert(offen: list[dict]) -> float | None:
@@ -1000,13 +1004,14 @@ def _zentrale(pfad, zeilen: list[dict]) -> dict:
         punkte = (zeile.get("detail") or {}).get("punkte") or []
         if len(punkte) >= 2:
             kurven.append({"name": zeile["name"], "punkte": punkte})
-    gesamt = _gesamt_punkte(pfad)
+    verlauf = _gesamt_verlauf(pfad)
+    gesamt = verlauf["punkte"]
     buecher = _letzte_buecher(pfad)
-    kapital = None if not buecher else _START * len(buecher)
+    kapital = _kapital_summe(pfad)
     equity = None if not buecher or any(buch["equity"] is None for buch in buecher) else sum(buch["equity"] for buch in buecher)
     cash = None if not buecher or any(buch["cash"] is None for buch in buecher) else sum(buch["cash"] for buch in buecher)
     rendite = None if kapital is None or equity is None or kapital <= 0 else (equity / kapital - 1) * 100
-    tief = _drawdown_aus([punkt["equity"] for punkt in gesamt])
+    tief = None if verlauf["veraltet"] or verlauf["unvollstaendig"] else verlauf["drawdown"]
     faktor = None
     if trades >= _MINDEST and verlust_summe < 0:
         faktor = gewinn_summe / abs(verlust_summe)
@@ -1019,7 +1024,7 @@ def _zentrale(pfad, zeilen: list[dict]) -> dict:
         "realisiert": "Keine Daten" if not realisiert else f"{sum(realisiert):.2f}",
         "unrealisiert": "Keine Daten" if not unrealisiert else f"{sum(unrealisiert):.2f}",
         "rendite": "Keine Daten" if rendite is None else f"{rendite:.1f} %",
-        "drawdown": "Keine Daten" if tief is None else f"{tief:.1%}",
+        "drawdown": "Nicht ausreichend Daten" if verlauf["veraltet"] or verlauf["unvollstaendig"] else ("Keine Daten" if tief is None else f"{tief:.1%}"),
         "faktor": "Keine Daten" if trades == 0 else ("Nicht ausreichend Daten" if faktor is None else f"{faktor:.2f}"),
         "equity_buecher": len(buecher),
         "offen": sum(len((zeile.get("detail") or {}).get("offen") or []) for zeile in zeilen),
@@ -1028,9 +1033,11 @@ def _zentrale(pfad, zeilen: list[dict]) -> dict:
         "realisiert_punkte": _realisiert_punkte(pfad),
         "aktualitaet": _aktualitaet(pfad, buecher, kurs_fehlt),
         "hinweis": (
-            "Equity ist die Summe der eröffneten Trader-Bücher. Rendite ist Gesamt-Equity gegen deren Startkapital, "
-            "kein Mittel der Einzelprozente. Drawdown kommt aus dieser gemeinsamen Kurve. "
-            "Spread und Slippage sind nicht gemessen. Sharpe je Equity-Stand, nicht annualisiert."
+            "Die gezeichnete Kurve lässt neue Bücher und Einzahlungen weg. Die Equity-Zahl bleibt die Summe der Bücher. "
+            "Rendite ist Gesamt-Equity gegen das gespeicherte Kapital, kein Mittel der Einzelprozente. "
+            "Drawdown nutzt die kapitalbereinigte Kurve. Ein veralteter Stand ergibt keinen Risiko-Prozentwert. "
+            "Spread und Slippage sind nicht gemessen. Sharpe je Equity-Stand, nicht annualisiert. "
+            + verlauf["hinweis"]
         ),
         "zeit_hinweis": "Der Zeitraum filtert nur die Diagramme. Kennzahlen gelten für den gesamten gespeicherten Zeitraum.",
     }
@@ -1060,53 +1067,240 @@ def _letzte_buecher(pfad) -> list[dict]:
     return buecher
 
 
-def _gesamt_punkte(pfad) -> list[dict]:
-    """Letzten gemessenen Stand je Buch fortschreiben. Kein erfundener Kurs."""
+_REBASE = {"zuruecksetzen", "wiederherstellung", "schliessen"}
+
+
+def kapital_buchen(pfad, name: str, betrag: Decimal, art: str, zeit: str) -> bool:
+    """Hängt eine Kapitalbewegung an. Alte Zeilen bleiben unverändert."""
+    _tabellen(pfad)
+    stempel = _zeit_lesen(zeit)
+    if stempel is None or art not in {"eroeffnung", "erster Stand", "einzahlung", "auszahlung", "zuruecksetzen", "wiederherstellung", "schliessen"}:
+        return False
+    with sqlite3.connect(pfad) as verbindung:
+        vorhanden = verbindung.execute(
+            "SELECT id, basis FROM ki_haendler_kapital WHERE haendler = ? ORDER BY zeit, id",
+            (name,),
+        ).fetchall()
+        if art in {"eroeffnung", "erster Stand"} and vorhanden:
+            return False
+        aktuell = Decimal(0) if not vorhanden else (_zahl(vorhanden[-1][1]) or Decimal(0))
+        if art == "schliessen":
+            neu = Decimal(0)
+        elif art in {"eroeffnung", "erster Stand", "zuruecksetzen", "wiederherstellung"}:
+            if betrag is None or betrag < 0:
+                return False
+            neu = betrag
+        elif art == "einzahlung":
+            neu = aktuell + abs(betrag)
+        else:
+            neu = aktuell - abs(betrag)
+            if neu < 0:
+                return False
+        verbindung.execute(
+            """
+            INSERT INTO ki_haendler_kapital (haendler, delta, basis, art, zeit)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, str((neu - aktuell).quantize(Decimal("0.01"))), str(neu.quantize(Decimal("0.01"))), art, stempel.isoformat()),
+        )
+    return True
+
+
+def _hat_kontozeile(pfad, name: str) -> bool:
     if not pfad.exists():
-        return []
+        return False
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "paper_konto" not in tabellen:
+            return False
+        zeile = verbindung.execute(
+            "SELECT 1 FROM paper_konto WHERE broker = 'Lokal' AND konto = ? LIMIT 1",
+            (name,),
+        ).fetchone()
+    return zeile is not None
+
+
+def _kapital_nachziehen(pfad) -> None:
+    """Erster gemessener Stand wird einmal als Kapital gespeichert. Nichts wird überschrieben."""
+    if not pfad.exists():
+        return
+    _tabellen(pfad)
     namen = {haendler.name for haendler in HAENDLER}
     with sqlite3.connect(pfad) as verbindung:
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if "paper_konto" not in tabellen:
-            return []
+            return
+        belegt = {str(zeile[0]) for zeile in verbindung.execute("SELECT DISTINCT haendler FROM ki_haendler_kapital")}
         zeilen = verbindung.execute(
-            "SELECT konto, equity, zeit FROM paper_konto WHERE broker = 'Lokal' ORDER BY id"
+            """
+            SELECT konto, equity, zeit, id FROM paper_konto
+            WHERE broker = 'Lokal' ORDER BY id
+            """
         ).fetchall()
-    serien: dict[str, list[tuple[datetime, str, float]]] = {}
-    for konto, equity, zeit in zeilen:
-        if konto not in namen:
+    erste: dict[str, tuple] = {}
+    for konto, equity, zeit, nummer in zeilen:
+        if konto not in namen or konto in belegt or konto in erste:
             continue
-        zahl = _zahl(equity)
+        if _zahl(equity) is None or _zeit_lesen(zeit) is None:
+            continue
+        erste[str(konto)] = (equity, zeit, nummer)
+    for name, (equity, zeit, _nummer) in erste.items():
+        kapital_buchen(pfad, name, _zahl(equity) or Decimal(0), "erster Stand", str(zeit))
+
+
+def _basis_name(pfad, name: str) -> Decimal | None:
+    if not pfad.exists():
+        return None
+    _kapital_nachziehen(pfad)
+    with sqlite3.connect(pfad) as verbindung:
+        zeile = verbindung.execute(
+            "SELECT basis FROM ki_haendler_kapital WHERE haendler = ? ORDER BY zeit, id DESC LIMIT 1",
+            (name,),
+        ).fetchone()
+    if zeile is None:
+        return None
+    return _zahl(zeile[0])
+
+
+def _kapital_summe(pfad) -> Decimal | None:
+    if not pfad.exists():
+        return None
+    _kapital_nachziehen(pfad)
+    namen = {haendler.name for haendler in HAENDLER}
+    with sqlite3.connect(pfad) as verbindung:
+        zeilen = verbindung.execute(
+            """
+            SELECT haendler, basis FROM ki_haendler_kapital
+            WHERE id IN (SELECT MAX(id) FROM ki_haendler_kapital GROUP BY haendler)
+            """
+        ).fetchall()
+    summe = Decimal(0)
+    gesehen = False
+    for name, basis in zeilen:
+        zahl = _zahl(basis)
+        if name not in namen or zahl is None or zahl <= 0:
+            continue
+        summe += zahl
+        gesehen = True
+    return summe if gesehen else None
+
+
+def _gesamt_verlauf(pfad) -> dict:
+    leer = {"punkte": [], "drawdown": None, "veraltet": False, "unvollstaendig": False, "hinweis": ""}
+    if not pfad.exists():
+        return leer
+    _kapital_nachziehen(pfad)
+    namen = {haendler.name for haendler in HAENDLER}
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "paper_konto" not in tabellen:
+            return leer
+        kontozeilen = verbindung.execute(
+            "SELECT id, konto, equity, zeit FROM paper_konto WHERE broker = 'Lokal' ORDER BY id"
+        ).fetchall()
+        kapitalzeilen = verbindung.execute(
+            "SELECT id, haendler, basis, art, zeit FROM ki_haendler_kapital ORDER BY id"
+        ).fetchall()
+    staende: dict[str, list[tuple]] = {}
+    for nummer, konto, equity, zeit in kontozeilen:
         stempel = _zeit_lesen(zeit)
-        if zahl is None or stempel is None:
+        zahl = _zahl(equity)
+        if konto not in namen or stempel is None or zahl is None:
             continue
-        serien.setdefault(str(konto), []).append((stempel, str(zeit), float(zahl)))
-    zeiten = sorted({eintrag[0] for serie in serien.values() for eintrag in serie})
-    zeiger = {name: 0 for name in serien}
-    letzter: dict[str, float] = {}
-    letzter_zeit: dict[str, datetime] = {}
-    letzter_text: dict[str, str] = {}
+        staende.setdefault(str(konto), []).append((stempel, str(zeit), float(zahl), int(nummer)))
+    bewegungen: dict[str, list[tuple]] = {}
+    for nummer, name, basis, art, zeit in kapitalzeilen:
+        stempel = _zeit_lesen(zeit)
+        zahl = _zahl(basis)
+        if name not in namen or stempel is None or zahl is None:
+            continue
+        bewegungen.setdefault(str(name), []).append((stempel, float(zahl), str(art), int(nummer)))
+    zeiten = sorted({eintrag[0] for serie in list(staende.values()) + list(bewegungen.values()) for eintrag in serie})
+    zeiger_stand = {name: 0 for name in staende}
+    zeiger_kapital = {name: 0 for name in bewegungen}
+    equity_jetzt: dict[str, float] = {}
+    equity_zeit: dict[str, datetime] = {}
+    basis_jetzt: dict[str, float] = {}
     punkte = []
+    vorher_equity = None
+    vorher_basis = None
+    wert = None
+    spitze = None
+    segment = 0.0
+    schlimmste = 0.0
+    unvollstaendig = False
     for zeit in zeiten:
-        for name, serie in serien.items():
-            index = zeiger[name]
+        rebase = False
+        for name, serie in staende.items():
+            index = zeiger_stand[name]
             while index < len(serie) and serie[index][0] <= zeit:
-                letzter[name] = serie[index][2]
-                letzter_zeit[name] = serie[index][0]
-                letzter_text[name] = serie[index][1]
+                equity_jetzt[name] = serie[index][2]
+                equity_zeit[name] = serie[index][0]
                 index += 1
-            zeiger[name] = index
-        if not letzter:
+            zeiger_stand[name] = index
+        for name, serie in bewegungen.items():
+            index = zeiger_kapital[name]
+            while index < len(serie) and serie[index][0] <= zeit:
+                basis_jetzt[name] = serie[index][1]
+                if serie[index][0] == zeit and serie[index][2] in _REBASE:
+                    rebase = True
+                index += 1
+            zeiger_kapital[name] = index
+        aktiv = [name for name, basis in basis_jetzt.items() if basis > 0]
+        if any(name not in equity_jetzt for name in aktiv):
+            unvollstaendig = True
             continue
+        if not aktiv:
+            if wert is not None and spitze is not None and spitze > 0:
+                schlimmste = max(schlimmste, segment)
+            wert = None
+            spitze = None
+            segment = 0.0
+            vorher_equity = None
+            vorher_basis = None
+            continue
+        equity = round(sum(equity_jetzt[name] for name in aktiv), 2)
+        basis = round(sum(basis_jetzt[name] for name in aktiv), 2)
+        if basis <= 0:
+            continue
+        if wert is None or rebase or vorher_equity is None:
+            if wert is not None and spitze is not None and spitze > 0:
+                schlimmste = max(schlimmste, segment)
+            wert = equity
+            spitze = equity
+            segment = 0.0
+        else:
+            wert = round(wert + (equity - vorher_equity) - (basis - vorher_basis), 2)
+            spitze = max(spitze, wert)
+            if spitze > 0:
+                segment = max(segment, (spitze - wert) / spitze)
+        vorher_equity = equity
+        vorher_basis = basis
         punkte.append(
             {
-                "equity": round(sum(letzter.values()), 2),
-                "zeit": letzter_text[max(letzter_zeit, key=letzter_zeit.get)],
-                "buecher": len(letzter),
-                "fortgeschrieben": sum(1 for name in letzter if letzter_zeit[name] != zeit),
+                "equity": equity,
+                "kapital": basis,
+                "wert": wert,
+                "zeit": zeit.isoformat(),
+                "buecher": len(aktiv),
+                "fortgeschrieben": sum(1 for name in aktiv if equity_zeit.get(name) != zeit),
             }
         )
-    return punkte
+    if wert is not None and spitze is not None and spitze > 0:
+        schlimmste = max(schlimmste, segment)
+    drawdown = None if len(punkte) < 2 or (spitze is not None and spitze <= 0 and schlimmste == 0) else schlimmste
+    if len(punkte) < 2:
+        drawdown = None
+    letzte = _zeit_lesen(punkte[-1]["zeit"]) if punkte else None
+    veraltet = letzte is not None and (datetime.now(timezone.utc) - letzte).total_seconds() > 10 * 24 * 3600  # noqa: UP017
+    hinweis = "Kontostand älter als 10 Tage. Der Drawdown ist deshalb kein aktueller Risikowert." if veraltet else ""
+    if unvollstaendig:
+        hinweis = "Mindestens ein Buch hat Kapital ohne Equity-Stand. " + hinweis
+    return {"punkte": punkte, "drawdown": drawdown, "veraltet": veraltet, "unvollstaendig": unvollstaendig, "hinweis": hinweis}
+
+
+def _gesamt_punkte(pfad) -> list[dict]:
+    return _gesamt_verlauf(pfad)["punkte"]
 
 
 def _realisiert_punkte(pfad) -> list[dict]:
@@ -1150,9 +1344,15 @@ def _aktualitaet(pfad, buecher: list[dict], kurs_fehlt: bool) -> dict:
         stand = letzte.isoformat()
         stand_hinweis = "Kontostand veraltet." if (jetzt - letzte).total_seconds() > 10 * 24 * 3600 else "Kontostand innerhalb von 10 Tagen."
     kurs_zeit, kurs_hinweis = _letzter_kurs(pfad, jetzt)
-    if kurs_fehlt:
-        kurs_hinweis = "Mindestens ein offener Kurs fehlt und wird nicht als 0 gezählt. " + kurs_hinweis
-    return {"kontostand": stand, "kontostand_hinweis": stand_hinweis, "letzter_kurs": kurs_zeit, "kurs_hinweis": kurs_hinweis}
+    lage = [position for haendler in HAENDLER for position in _offen_lesen(pfad, haendler.name)]
+    if lage:
+        teile = [f"{position['symbol']}: {position['status']}, {position['kurszeit'] or 'ohne Zeit'}" for position in lage]
+        kurs_hinweis = "Je Symbol einzeln, nicht der neueste Kurs aller Namen. " + " | ".join(teile)
+    else:
+        kurs_hinweis = "Keine offenen Positionen. Ein einzelner gespeicherter Kurs gilt nicht für jedes Symbol. " + kurs_hinweis
+    if kurs_fehlt and lage:
+        kurs_hinweis = "Unvollständig, fehlende Werte sind keine 0. " + kurs_hinweis
+    return {"kontostand": stand, "kontostand_hinweis": stand_hinweis, "letzter_kurs": kurs_zeit, "kurs_hinweis": kurs_hinweis, "positionen": lage}
 
 
 def _letzter_kurs(pfad, jetzt: datetime) -> tuple[str, str]:
@@ -1169,7 +1369,9 @@ def _letzter_kurs(pfad, jetzt: datetime) -> tuple[str, str]:
         stempel = datetime.fromtimestamp(float(zeile[0]), timezone.utc)  # noqa: UP017
     except (OSError, OverflowError, ValueError):
         return "Keine Daten", "Kurszeit ist ungültig."
-    hinweis = "Kurs veraltet." if (jetzt - stempel).total_seconds() > 10 * 24 * 3600 else "Letzter gültiger Kurs innerhalb von 10 Tagen."
+    hinweis = "Neuester gespeicherter Kurs, nicht der Stand jedes Symbols. " + (
+        "Kurs veraltet." if (jetzt - stempel).total_seconds() > 10 * 24 * 3600 else "Zeitpunkt liegt innerhalb von 10 Tagen."
+    )
     return stempel.isoformat(), hinweis
 
 
@@ -1212,13 +1414,10 @@ def _quoten_aus_equity(pfad, name: str) -> tuple[str, str]:
 
 
 def _rendite(pfad, name: str) -> str:
-    werte = _equity_reihe(pfad, name)
-    if not werte:
-        return _KENNZAHL
-    start = float(_START)
-    if start <= 0:
-        return _KENNZAHL
-    return f"{(werte[-1] / start - 1) * 100:.1f} %"
+    zahl = _rendite_zahl(pfad, name)
+    if zahl is None:
+        return "Keine Daten" if not _equity_reihe(pfad, name) else _KENNZAHL
+    return f"{zahl:.1f} %"
 
 
 def _equity_reihe(pfad, name: str) -> list[float]:
@@ -1309,7 +1508,7 @@ def _detail(pfad, name: str) -> dict:
     konto = _kontostand(pfad, name)
     punkte = _equity_punkte(pfad, name)[-120:]
     return {
-        "start": f"{_START:.2f}",
+        "start": None if (basis := _basis_name(pfad, name)) is None else f"{basis:.2f}",
         "equity": konto["equity"],
         "cash": konto["cash"],
         "hat_buch": konto["hat_buch"],
@@ -1372,16 +1571,62 @@ def _offen_lesen(pfad, name: str) -> list[dict]:
             "SELECT symbol, menge, einstieg, jetzt FROM paper_buch WHERE konto = ?",
             (name,),
         ).fetchall()
-    return [
-        {
-            "symbol": zeile[0],
-            "menge": zeile[1],
-            "einstieg": zeile[2],
-            "jetzt": zeile[3],
-            "kurs_fehlt": zeile[3] in (None, ""),
-        }
-        for zeile in zeilen
-    ]
+        kurse = {}
+        if "kurse" in tabellen:
+            for symbol, *_rest in zeilen:
+                kurs = verbindung.execute(
+                    "SELECT zeit, schluss FROM kurse WHERE symbol = ? AND schluss > 0 ORDER BY zeit DESC LIMIT 1",
+                    (symbol,),
+                ).fetchone()
+                if kurs is not None:
+                    kurse[symbol] = kurs
+    uhr = datetime.now(timezone.utc)  # noqa: UP017
+    ergebnis = []
+    for symbol, menge, einstieg, jetzt in zeilen:
+        kurs = kurse.get(symbol)
+        kurszeit = None
+        if kurs is not None:
+            try:
+                kurszeit = datetime.fromtimestamp(float(kurs[0]), timezone.utc)  # noqa: UP017
+            except (OSError, OverflowError, TypeError, ValueError):
+                kurszeit = None
+        status = _positions_status(symbol, menge, einstieg, jetzt, kurszeit, uhr)
+        ergebnis.append(
+            {
+                "symbol": symbol,
+                "menge": menge,
+                "einstieg": einstieg,
+                "jetzt": jetzt,
+                "kurszeit": None if kurszeit is None else kurszeit.isoformat(),
+                "status": status,
+                "kurs_fehlt": status != "Kurs aktuell",
+            }
+        )
+    return ergebnis
+
+
+def _positions_status(symbol: str, menge, einstieg, jetzt, kurszeit: datetime | None, uhr: datetime) -> str:
+    menge_zahl = _zahl(menge)
+    einstieg_zahl = _zahl(einstieg)
+    kurs = _zahl(jetzt)
+    if menge_zahl is None:
+        return "Menge fehlt"
+    if menge_zahl <= 0:
+        return "Menge ungültig"
+    if einstieg_zahl is None:
+        return "Einstieg fehlt"
+    if einstieg_zahl <= 0:
+        return "Einstieg ungültig"
+    if kurs is None:
+        return "Kurs fehlt"
+    if kurs <= 0:
+        return "Kurs ungültig"
+    if kurszeit is None:
+        return "Kurszeit fehlt"
+    grenze = 2 * 24 * 3600 if str(symbol).upper().endswith("-USD") else 10 * 24 * 3600
+    if (uhr - kurszeit).total_seconds() > grenze:
+        return "Kurs veraltet"
+    return "Kurs aktuell"
 
 
 def _geschlossen(pfad, name: str) -> list[dict]:
@@ -1501,6 +1746,11 @@ def pruefe(pfad, name: str) -> dict:
                 "menge": _zahl(menge),
             }
         )
+    if any(_fall_zeit(fall) is None for fall in faelle):
+        bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Ohne Ausstiegszeit ist die zeitliche Trennung nicht möglich.", "test_n": len(faelle)}
+        _pruefung_speichern(pfad, name, bericht)
+        return bericht
+    faelle.sort(key=lambda fall: (_fall_zeit(fall), fall["id"]))
     if len(faelle) < 36:
         bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Weniger als 36 abgeschlossene Fälle für Training, Prüfung und Test.", "test_n": len(faelle)}
         _pruefung_speichern(pfad, name, bericht)
@@ -1509,7 +1759,11 @@ def pruefe(pfad, name: str) -> dict:
     training = faelle[:drittel]
     validierung = faelle[drittel:drittel * 2]
     test = faelle[drittel * 2:]
-    if not validierung or test[0]["id"] <= validierung[-1]["id"] or validierung[0]["id"] <= training[-1]["id"]:
+    if (
+        not validierung
+        or _fall_zeit(test[0]) <= _fall_zeit(validierung[-1])
+        or _fall_zeit(validierung[0]) <= _fall_zeit(training[-1])
+    ):
         bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Testfälle liegen nicht nach der Prüfung.", "test_n": len(test)}
         _pruefung_speichern(pfad, name, bericht)
         return bericht
@@ -1527,9 +1781,16 @@ def pruefe(pfad, name: str) -> dict:
     genommen = _ausgewaehlt(modell, test, wahrscheinlichkeit)
     modell_netto = _mittel([fall["netto"] for fall in genommen])
     regel_netto = _mittel([fall["netto"] for fall in test])
-    pfad_werte = [fall["netto"] for fall in (genommen if wahl == "modell" else test)]
-    risiko = _drawdown_aus(_summenpfad(pfad_werte))
-    risiko_ok = risiko is not None and risiko <= 0.08
+    basis = _basis_name(pfad, name)
+    start = float(basis) if basis is not None and basis > 0 else float(_START)
+    genommen_ids = {fall["id"] for fall in genommen}
+    modell_pfad = _equity_aus_nettos(start, [fall["netto"] if fall["id"] in genommen_ids else 0.0 for fall in test])
+    regel_pfad = _equity_aus_nettos(start, [fall["netto"] for fall in test])
+    modell_dd = _drawdown_aus(modell_pfad)
+    regel_dd = _drawdown_aus(regel_pfad)
+    risiko_ok = modell_dd is not None and regel_dd is not None and modell_dd <= 0.08 and modell_dd <= regel_dd
+    modell_ende = modell_pfad[-1]
+    regel_ende = regel_pfad[-1]
     benchmark_summe, benchmark_text = _benchmark_summe(pfad, genommen if wahl == "modell" else test)
     unsicherheit = _untere_grenze([fall["netto"] for fall in genommen]) if wahl == "modell" else _untere_grenze([fall["netto"] for fall in test])
     besser = False
@@ -1543,7 +1804,10 @@ def pruefe(pfad, name: str) -> dict:
         and unsicherheit is not None
         and unsicherheit > 0
         and unsicherheit > regel_netto
-        and sum(fall["netto"] for fall in genommen) > benchmark_summe
+        and modell_ende > start
+        and modell_ende > regel_ende
+        and benchmark_summe is not None
+        and modell_ende > start + benchmark_summe
         and risiko_ok
     ):
         besser = True
@@ -1555,8 +1819,9 @@ def pruefe(pfad, name: str) -> dict:
     grund = (
         f"{status}. Validierung wählt {wahl}. Validierung Modell {_zahl_text(val_modell)}, Regel {_zahl_text(val_regel)}. "
         f"Test Modell {_zahl_text(modell_netto)} auf {len(genommen)} von {len(test)} späteren Fällen, Regel {_zahl_text(regel_netto)}. "
-        f"Untere Grenze {_zahl_text(unsicherheit)}. {benchmark_text} "
-        "Dieselbe Netto-Annahme, 0,125 Prozent je Seite. Aktives Modell unverändert."
+        f"Untere Grenze {_zahl_text(unsicherheit)}. Equity ab {start:.2f}, Modellende {_zahl_text(modell_ende)}, Regelende {_zahl_text(regel_ende)}. "
+        f"{benchmark_text} Spread und Slippage sind für beide nicht gemessen. "
+        "Sharpe nicht ausreichend Daten. Aktives Modell unverändert."
     )
     bericht = {
         "besser": besser,
@@ -1608,6 +1873,20 @@ def _summenpfad(werte: list[float]) -> list[float]:
 
 def _zahl_text(wert: float | None) -> str:
     return "—" if wert is None else f"{wert:.2f}"
+
+
+def _fall_zeit(fall: dict) -> datetime | None:
+    return _zeit_lesen(fall.get("ausstieg_zeit")) or _zeit_lesen(fall.get("zeit"))
+
+
+def _equity_aus_nettos(start: float, nettos: list[float]) -> list[float]:
+    """Equity-Kurve ab demselben Start. Übersprungene Fälle lassen das Kapital unverändert."""
+    lauf = start
+    pfad = [lauf]
+    for netto in nettos:
+        lauf += netto
+        pfad.append(lauf)
+    return pfad
 
 
 def _benchmark_summe(pfad, faelle: list[dict]) -> tuple[float | None, str]:
@@ -1875,6 +2154,18 @@ def _tabellen(pfad) -> None:
             CREATE TABLE IF NOT EXISTS ki_haendler_meta (
                 id INTEGER PRIMARY KEY,
                 text TEXT NOT NULL,
+                zeit TEXT NOT NULL
+            )
+            """
+        )
+        verbindung.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ki_haendler_kapital (
+                id INTEGER PRIMARY KEY,
+                haendler TEXT NOT NULL,
+                delta TEXT NOT NULL,
+                basis TEXT NOT NULL,
+                art TEXT NOT NULL,
                 zeit TEXT NOT NULL
             )
             """

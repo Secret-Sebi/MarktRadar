@@ -299,15 +299,15 @@ class HaendlerTests(unittest.TestCase):
             papier_tabellen(pfad)
             with sqlite3.connect(pfad) as verbindung:
                 verbindung.execute(
-                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-01-01T00:00:00+00:00', 'Momentum')"
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-11-20T00:00:00+00:00', 'Momentum')"
                 )
                 verbindung.execute(
-                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '4000', '4000', '10000', '', '', '2026-01-01T00:01:00+00:00', 'Momentum')"
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '4000', '4000', '10000', '', '', '2026-11-20T00:01:00+00:00', 'Momentum')"
                 )
                 for nummer in range(500):
                     verbindung.execute(
                         "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', ?, 'Momentum')",
-                        (f"2026-01-02T00:{nummer // 60:02d}:{nummer % 60:02d}+00:00",),
+                        (f"2026-11-20T01:{nummer // 60:02d}:{nummer % 60:02d}+00:00",),
                     )
             zentrale = uebersicht(pfad)["zentrale"]
             self.assertEqual(len(zentrale["gesamt"]), 500)
@@ -330,6 +330,9 @@ class HaendlerTests(unittest.TestCase):
                     "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '9900', '10000', '', '', '2020-01-01T00:00:00+00:00', 'Momentum')"
                 )
                 verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '7000', '6900', '10000', '', '', '2020-01-02T00:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
                     "INSERT INTO paper_buch (konto, symbol, menge, einstieg, zeit, strategie) VALUES ('Momentum', 'AAPL', '1', '100', '2020-01-01T00:00:00+00:00', 'Momentum')"
                 )
             zentrale = uebersicht(pfad)["zentrale"]
@@ -337,6 +340,7 @@ class HaendlerTests(unittest.TestCase):
             self.assertIsNone(momentum["unrealisiert_zahl"])
             self.assertEqual(zentrale["unrealisiert"], "Keine Daten")
             self.assertIn("veraltet", zentrale["aktualitaet"]["kontostand_hinweis"])
+            self.assertEqual(zentrale["drawdown"], "Nicht ausreichend Daten")
             self.assertEqual(zentrale["aktualitaet"]["letzter_kurs"], "Keine Daten")
 
     def test_success_rate_zaehlt_nur_gueltige_abgeschlossene_nettoergebnisse(self):
@@ -466,6 +470,116 @@ class HaendlerTests(unittest.TestCase):
             self.assertLess(bericht["pruef_ab"], bericht["test_ab"])
             with sqlite3.connect(pfad) as verbindung:
                 self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_haendler_modell").fetchone()[0], 0)
+
+    def test_neues_buch_und_anderes_startkapital_sind_kein_gewinn(self):
+        from haendler import kapital_buchen
+        from papier import _tabellen as papier_tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            papier_tabellen(pfad)
+            self.assertTrue(kapital_buchen(pfad, "Momentum", Decimal(10000), "eroeffnung", "2026-11-20T10:00:00+00:00"))
+            self.assertFalse(kapital_buchen(pfad, "Momentum", Decimal(99999), "eroeffnung", "2026-11-20T11:00:00+00:00"))
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-11-20T10:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '11000', '11000', '10000', '', '', '2026-11-20T11:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '11000', '11000', '10000', '', '', '2026-11-20T11:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '8000', '8000', '10000', '', '', '2026-11-20T11:00:00+00:00', 'Momentum')"
+                )
+            self.assertTrue(kapital_buchen(pfad, "RSI", Decimal(2000), "eroeffnung", "2026-11-20T12:00:00+00:00"))
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '2000', '2000', '2000', '', '', '2026-11-20T12:00:00+00:00', 'RSI')"
+                )
+            zentrale = uebersicht(pfad)["zentrale"]
+            self.assertEqual(zentrale["equity"], "10000.00")
+            self.assertEqual(zentrale["kapital"], "12000.00")
+            self.assertEqual(zentrale["gesamt"][1]["equity"], 8000.0)
+            self.assertEqual(zentrale["gesamt"][-1]["equity"], 10000.0)
+            self.assertEqual(zentrale["gesamt"][-1]["wert"], 8000.0)
+            self.assertEqual(zentrale["rendite"], "-16.7 %")
+            self.assertTrue(kapital_buchen(pfad, "Momentum", Decimal(5000), "einzahlung", "2026-11-21T10:00:00+00:00"))
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '13000', '13000', '15000', '', '', '2026-11-21T10:00:00+00:00', 'Momentum')"
+                )
+            nachher = uebersicht(pfad)["zentrale"]
+            self.assertEqual(nachher["gesamt"][-1]["wert"], 8000.0)
+            self.assertEqual(nachher["gesamt"][-1]["equity"], 15000.0)
+            self.assertTrue(kapital_buchen(pfad, "RSI", Decimal(2000), "zuruecksetzen", "2026-11-21T11:00:00+00:00"))
+            with sqlite3.connect(pfad) as verbindung:
+                alt = verbindung.execute("SELECT equity FROM paper_konto WHERE konto = 'Momentum' ORDER BY id LIMIT 1").fetchone()[0]
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '2000', '2000', '2000', '', '', '2026-11-21T11:00:00+00:00', 'RSI')"
+                )
+            self.assertEqual(alt, "10000")
+            frisch = uebersicht(pfad)["zentrale"]
+            self.assertEqual(frisch["gesamt"][1]["wert"], 8000.0)
+
+    def test_fehlende_positionsdaten_bleiben_unvollstaendig(self):
+        from papier import _tabellen as papier_tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            papier_tabellen(pfad)
+            frisch = int(datetime(2026, 11, 22, 10, tzinfo=BERLIN).timestamp())
+            alt = int(datetime(2020, 1, 1, tzinfo=BERLIN).timestamp())
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute("CREATE TABLE IF NOT EXISTS kurse (symbol TEXT, zeit INTEGER, schluss REAL)")
+                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('AAPL', ?, 120)", (frisch,))
+                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('MSFT', ?, 90)", (alt,))
+                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('MSFT', ?, -1)", (frisch,))
+                verbindung.execute(
+                    "INSERT INTO paper_buch (konto, symbol, menge, einstieg, zeit, strategie, jetzt) VALUES ('Momentum', 'AAPL', '1', '100', '2026-11-22T10:00:00+00:00', 'Momentum', '120')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_buch (konto, symbol, menge, einstieg, zeit, strategie, jetzt) VALUES ('Momentum', 'MSFT', '1', '100', '2026-11-22T10:00:00+00:00', 'Momentum', '90')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_buch (konto, symbol, menge, einstieg, zeit, strategie) VALUES ('RSI', 'SAP.DE', '', '', '2026-11-22T10:00:00+00:00', 'RSI')"
+                )
+            bild = uebersicht(pfad)
+            momentum = next(zeile for zeile in bild["rangliste"] if zeile["name"] == "Momentum")
+            rsi = next(zeile for zeile in bild["rangliste"] if zeile["name"] == "RSI")
+            self.assertIsNone(momentum["unrealisiert_zahl"])
+            self.assertEqual(momentum["detail"]["offen"][0]["status"], "Kurs aktuell")
+            self.assertEqual(momentum["detail"]["offen"][1]["status"], "Kurs veraltet")
+            self.assertNotEqual(momentum["detail"]["offen"][0]["kurszeit"], momentum["detail"]["offen"][1]["kurszeit"])
+            self.assertEqual(rsi["detail"]["offen"][0]["status"], "Menge fehlt")
+            self.assertIn("je symbol", bild["zentrale"]["aktualitaet"]["kurs_hinweis"].lower())
+            self.assertIn("Unvollständig", bild["zentrale"]["aktualitaet"]["kurs_hinweis"])
+
+    def test_pruefung_folgt_der_zeit_und_nicht_der_id(self):
+        from datetime import timedelta
+
+        from haendler import _tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            _tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                for nummer in range(36):
+                    zeit = datetime(2026, 5, 1, tzinfo=BERLIN) + timedelta(days=35 - nummer)
+                    verbindung.execute(
+                        """
+                        INSERT INTO ki_haendler_fall
+                        (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit, ausstieg_zeit)
+                        VALUES ('Momentum', 'AAPL', 'mittel', '[0.1, 0.1]', '100', '101', '1.00', 'Annahme', 'nicht gemessen', 'simulation', 0, ?, ?)
+                        """,
+                        (zeit.isoformat(), (zeit + timedelta(hours=12)).isoformat()),
+                    )
+            bericht = pruefe(pfad, "Momentum")
+            self.assertEqual(bericht["status"], "Benchmark nicht gemessen")
+            self.assertGreater(bericht["train_bis"], bericht["pruef_ab"])
+            self.assertGreater(bericht["pruef_ab"], bericht["test_ab"])
+            self.assertFalse(bericht["besser"])
 
     def test_negativer_vorsprung_wird_nicht_freigegeben(self):
         from haendler import _haltung, _tabellen

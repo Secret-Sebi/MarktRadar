@@ -697,14 +697,14 @@ function diagramm(titel, punkte, hinweis) {
   const name = document.createElement("h2");
   text(name, titel);
   kasten.append(name);
-  const gefiltert = (punkte || []).filter(function (punkt) { return punktImZeitraum(punkt.zeit) && Number.isFinite(Number(punkt.equity)); });
+  const gefiltert = (punkte || []).filter(function (punkt) { return punktImZeitraum(punkt.zeit) && Number.isFinite(punktWert(punkt)); });
   if (gefiltert.length < 2) {
     const leer = document.createElement("p");
     text(leer, "Keine Daten. " + (hinweis || "Es liegen weniger als zwei gespeicherte Stände in diesem Zeitraum."));
     kasten.append(leer);
     return kasten;
   }
-  const werte = gefiltert.map(function (punkt) { return Number(punkt.equity); });
+  const werte = gefiltert.map(function (punkt) { return punktWert(punkt); });
   const unten = Math.min.apply(null, werte);
   const oben = Math.max.apply(null, werte);
   const spanne = oben - unten || 1;
@@ -734,7 +734,9 @@ function diagramm(titel, punkte, hinweis) {
     kreis.addEventListener("mouseenter", function () {
       const anfang = werte[index] - werte[0];
       const vergleich = index === 0 ? "Startpunkt" : "zum vorherigen Stand " + vorzeichen(werte[index] - werte[index - 1]);
-      text(tipp, zeitText(punkt.zeit) + " · Equity " + werte[index].toFixed(2) + " Euro · " + vergleich + " · seit Beginn " + vorzeichen(anfang) + (punkt.fortgeschrieben ? " · " + punkt.fortgeschrieben + " Bücher mit älterem Stand" : "") + (punkt.buecher ? " · " + punkt.buecher + " Bücher" : ""));
+      const kapital = punkt.kapital == null ? "" : " · Kapital " + Number(punkt.kapital).toFixed(2) + " Euro";
+      const roh = punkt.equity == null ? "" : " · Summe " + Number(punkt.equity).toFixed(2) + " Euro";
+      text(tipp, zeitText(punkt.zeit) + " · bereinigt " + werte[index].toFixed(2) + " Euro" + roh + kapital + " · " + vergleich + " · seit Beginn " + vorzeichen(anfang) + (punkt.fortgeschrieben ? " · " + punkt.fortgeschrieben + " Bücher mit älterem Stand" : "") + (punkt.buecher ? " · " + punkt.buecher + " Bücher" : ""));
     });
     svg.append(kreis);
   });
@@ -747,6 +749,11 @@ function diagramm(titel, punkte, hinweis) {
   text(satz, (aenderung >= 0 ? "Gewinn " : "Verlust ") + Math.abs(aenderung).toFixed(2) + " Euro gegenüber dem ersten Stand dieser Kurve");
   kasten.append(svg, achse, satz, tipp);
   return kasten;
+}
+
+function punktWert(punkt) {
+  if (punkt.wert != null && Number.isFinite(Number(punkt.wert))) return Number(punkt.wert);
+  return Number(punkt.equity);
 }
 
 function vorzeichen(wert) {
@@ -932,7 +939,7 @@ function detailBlick(stand) {
   karten.className = "kpi-reihe";
   karten.append(kpiKarte("Status", zeile.status, zeile.fehlt || zeile.regel));
   karten.append(kpiKarte("Version", String(zeile.version), zeile.lernstatus));
-  karten.append(kpiKarte("Start", detail.start || "10000.00", "Virtuelles Startkapital in Euro."));
+  karten.append(kpiKarte("Start", detail.start || "Keine Daten", "Gespeichertes Startkapital, keine nachträgliche Schätzung."));
   karten.append(kpiKarte("Equity", detail.hat_buch ? detail.equity : "Keine Daten", "Letzter Buchstand."));
   karten.append(kpiKarte("Rendite", zeile.rendite, "Letzte Equity gegen 10.000 Euro Start."));
   karten.append(kpiKarte("Realisiert", zeile.realisiert_zahl == null ? "Keine Daten" : zeile.realisiert_zahl.toFixed(2), "Netto abgeschlossener Trades nach Gebühren."));
@@ -951,7 +958,7 @@ function detailBlick(stand) {
   block.append(diagramm("Equity " + zeile.name, detail.punkte, "Zwei Stände fehlen noch."));
   (detail.offen || []).forEach(function (eintrag) {
     const satz = document.createElement("p");
-    text(satz, "Offen " + eintrag.symbol + ", Menge " + eintrag.menge + ", Einstieg " + eintrag.einstieg);
+    text(satz, "Offen " + eintrag.symbol + ", Menge " + (eintrag.menge || "fehlt") + ", Einstieg " + (eintrag.einstieg || "fehlt") + ", Kurs " + (eintrag.jetzt || "fehlt") + ", " + (eintrag.status || "Kurs fehlt") + ", " + (eintrag.kurszeit || "ohne Kurszeit"));
     block.append(satz);
   });
   (detail.geschlossen || []).forEach(function (eintrag) {
@@ -1014,7 +1021,7 @@ function listeBlick(block, stand, art) {
       if (!eintrag || (art === "pruefung" && !eintrag.grund)) return;
       zahl += 1;
       const satz = document.createElement("p");
-      text(satz, zeile.name + " · " + (art === "offen" ? (eintrag.symbol + " " + eintrag.menge) : art === "geschlossen" ? (eintrag.symbol + " Netto " + eintrag.ergebnis) : (eintrag.grund || eintrag.entscheidung || eintrag.version || "")));
+      text(satz, zeile.name + " · " + (art === "offen" ? (eintrag.symbol + " " + (eintrag.menge || "Menge fehlt") + " " + (eintrag.status || "Kurs fehlt") + " " + (eintrag.kurszeit || "ohne Kurszeit")) : art === "geschlossen" ? (eintrag.symbol + " Netto " + eintrag.ergebnis) : (eintrag.grund || eintrag.entscheidung || eintrag.version || "")));
       block.append(satz);
     });
   });
