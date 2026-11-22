@@ -86,8 +86,13 @@
   .kontozeile { margin: 0; padding: 8px 0; border-bottom: 1px solid rgba(61, 255, 154, .16); font-size: 16px; }
   .kontozeile.plus { color: #3dff9a; }
   .kontozeile.minus { color: #ff6b6b; }
-  .rangliste { max-height: 320px; overflow: auto; font-size: 14px; }
-  .rangliste p { margin: 0; padding: 6px 0; border-bottom: 1px solid rgba(61, 255, 154, .12); }
+  .ki-filter, .ki-sort { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .ki-filter button, .ki-sort button { font-size: 13px; padding: 4px 8px; }
+  .ki-scroll { max-height: 360px; overflow: auto; }
+  table.ki { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.ki th, table.ki td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(61, 255, 154, .16); white-space: nowrap; }
+  table.ki tr.wahl { background: rgba(61, 255, 154, .08); }
+  .ki-detail { font-size: 14px; line-height: 1.45; }
   body.alpaka #karten { display: none; }
   .buch { padding: 16px; border-radius: 18px; border: 1px solid rgba(61, 255, 154, .28); background: rgba(6, 22, 16, .86); }
   .buch h2 { margin-bottom: 4px; }
@@ -545,8 +550,12 @@ function erklaerungBlock(stand) {
 }
 
 let alleKonten = false;
+let kiFilter = "alle";
+let kiSort = "name";
+let kiWahl = "";
 
 function papierZeichnen(papier) {
+  window._papier = papier;
   papier = papier || {};
   const schalter = document.getElementById("papier-an");
   text(document.getElementById("papier-modus"), (papier.modus || "Simulation. Kein echtes Geld.") + " " + (papier.hinweis || "Paper-Handel ist aus."));
@@ -592,23 +601,133 @@ function haendlerZeichnen(brett, stand) {
   if (!stand) return;
   const kopf = document.createElement("h2");
   kopf.className = "breit";
-  text(kopf, "KI-Rangliste");
+  text(kopf, "KI-Zentrale");
   const satz = document.createElement("p");
   satz.className = "regel breit";
-  text(satz, stand.anzahl + " Trader, " + stand.aktiv + " im Wettbewerb, " + stand.pause + " pausiert. Beste: " + stand.beste + ". Schwächste: " + stand.schwaechste + ".");
-  const meta = document.createElement("p");
-  meta.className = "regel breit";
-  text(meta, stand.meta || "");
-  const liste = document.createElement("div");
-  liste.className = "breit rangliste";
-  (stand.rangliste || []).forEach(function (zeile) {
-    const block = document.createElement("p");
-    const platz = zeile.platz ? zeile.platz + ". " : "";
-    const status = zeile.einsatz ? "Wettbewerb" : "pausiert";
-    text(block, platz + zeile.name + " · " + zeile.gruppe + " · " + zeile.horizont + " · " + status + " · " + zeile.trades + " Fälle · " + zeile.ergebnis + " · " + (zeile.letzte || zeile.regel));
-    liste.append(block);
+  text(satz, stand.anzahl + " Trader, " + stand.aktiv + " im Wettbewerb, " + stand.pause + " pausiert, " + stand.ohne_daten + " ohne nutzbare Daten, " + stand.belastbar + " belastbar. Beste: " + stand.beste + ". Schwächste: " + stand.schwaechste + ". Letztes Lernen: " + stand.lernen + ".");
+  const metaText = document.createElement("p");
+  metaText.className = "regel breit";
+  text(metaText, stand.meta || "");
+  const filter = document.createElement("div");
+  filter.className = "breit ki-filter";
+  [
+    ["alle", "Alle"], ["aktiv", "Aktiv"], ["pausiert", "Pausiert"],
+    ["Technik", "Technik"], ["Fundament", "Fundamental"], ["Nachrichten", "Nachrichten"],
+    ["Markt", "Markt"], ["Experiment", "Experimentell"],
+    ["kurz", "Kurzfristig"], ["mittel", "Mittelfristig"], ["lang", "Langfristig"]
+  ].forEach(function (paar) {
+    const knopf = document.createElement("button");
+    knopf.type = "button";
+    text(knopf, paar[1]);
+    knopf.addEventListener("click", function () { kiFilter = paar[0]; if (window._papier) papierZeichnen(window._papier); });
+    filter.append(knopf);
   });
-  brett.append(kopf, satz, meta, liste);
+  const sortierung = document.createElement("div");
+  sortierung.className = "breit ki-sort";
+  [["name", "Name"], ["ergebnis_zahl", "Gewinn"], ["trades", "Trades"], ["drawdown", "Drawdown"]].forEach(function (paar) {
+    const knopf = document.createElement("button");
+    knopf.type = "button";
+    text(knopf, "Sortierung " + paar[1]);
+    knopf.addEventListener("click", function () { kiSort = paar[0]; if (window._papier) papierZeichnen(window._papier); });
+    sortierung.append(knopf);
+  });
+  const scroller = document.createElement("div");
+  scroller.className = "breit ki-scroll";
+  const tabelle = document.createElement("table");
+  tabelle.className = "ki";
+  const kopfzeile = document.createElement("tr");
+  ["Rang", "Name", "Gruppe", "Markt", "Horizont", "Status", "Rendite", "Euro", "Quote", "Trades", "Drawdown", "Version"].forEach(function (name) {
+    const zelle = document.createElement("th");
+    text(zelle, name);
+    kopfzeile.append(zelle);
+  });
+  tabelle.append(kopfzeile);
+  kiListe(stand).forEach(function (zeile) {
+    const reihe = document.createElement("tr");
+    if (zeile.name === kiWahl) reihe.className = "wahl";
+    [zeile.platz || "—", zeile.name, zeile.gruppe, zeile.markt, zeile.horizont, zeile.status, zeile.rendite, zeile.ergebnis, zeile.quote, String(zeile.trades), zeile.drawdown, String(zeile.version)].forEach(function (wert) {
+      const zelle = document.createElement("td");
+      text(zelle, wert);
+      reihe.append(zelle);
+    });
+    reihe.addEventListener("click", function () { kiWahl = kiWahl === zeile.name ? "" : zeile.name; if (window._papier) papierZeichnen(window._papier); });
+    tabelle.append(reihe);
+  });
+  scroller.append(tabelle);
+  brett.append(kopf, satz, metaText, filter, sortierung, scroller, kiDetail(stand), kiMeta(stand));
+}
+
+function kiListe(stand) {
+  const liste = (stand.rangliste || []).filter(function (zeile) {
+    if (kiFilter === "alle") return true;
+    if (kiFilter === "aktiv") return zeile.einsatz;
+    if (kiFilter === "pausiert") return !zeile.einsatz;
+    if (kiFilter === "kurz" || kiFilter === "mittel" || kiFilter === "lang") return zeile.horizont === kiFilter;
+    return zeile.gruppe === kiFilter;
+  });
+  liste.sort(function (a, b) {
+    const links = a[kiSort];
+    const rechts = b[kiSort];
+    if (typeof links === "number" && typeof rechts === "number") return rechts - links;
+    return String(links || "").localeCompare(String(rechts || ""), "de");
+  });
+  return liste;
+}
+
+function kiDetail(stand) {
+  const block = document.createElement("div");
+  block.className = "breit ki-detail";
+  const zeile = (stand.rangliste || []).find(function (eintrag) { return eintrag.name === kiWahl; });
+  if (!zeile) {
+    const leer = document.createElement("p");
+    text(leer, "Trader anklicken für Strategie, Konto, Fälle und Modell.");
+    block.append(leer);
+    return block;
+  }
+  const detail = zeile.detail || {};
+  const absatz = document.createElement("p");
+  const verlauf = (detail.verlauf || []).length > 1 ? detail.verlauf.join(" → ") : "Verlauf liegt noch nicht vor.";
+  text(absatz, zeile.name + ". " + zeile.regel + " Daten: " + zeile.daten + " Merkmale: " + zeile.merkmale_text + (zeile.fehlt ? " Pause: " + zeile.fehlt : "") + " Start " + (detail.start || "10000.00") + " Euro, Equity " + (detail.equity || "—") + ", Cash " + (detail.cash || "—") + ". " + zeile.lernstatus + ". Version " + zeile.version + ". Sharpe " + zeile.sharpe + ". Sortino " + zeile.sortino + ". Faktor " + zeile.faktor + ". Benchmark " + zeile.benchmark + ". Verlauf: " + verlauf);
+  block.append(absatz);
+  (detail.offen || []).forEach(function (position) {
+    const zeileText = document.createElement("p");
+    text(zeileText, "Offen " + position.symbol + " Menge " + position.menge + " Einstieg " + position.einstieg);
+    block.append(zeileText);
+  });
+  (detail.geschlossen || []).forEach(function (fall) {
+    const zeileText = document.createElement("p");
+    text(zeileText, "Geschlossen " + fall.symbol + " Netto " + fall.ergebnis + " Brutto " + (fall.brutto || "—"));
+    block.append(zeileText);
+  });
+  (detail.entscheidungen || []).slice(0, 3).forEach(function (entscheidung) {
+    const zeileText = document.createElement("p");
+    text(zeileText, (entscheidung.entscheidung || "") + " Signal " + (entscheidung.signal || "") + " " + (entscheidung.wahrscheinlichkeit || "ohne Wahrscheinlichkeit") + ". " + (entscheidung.grund || ""));
+    block.append(zeileText);
+  });
+  const pruefung = detail.pruefung || {};
+  const prueftext = document.createElement("p");
+  text(prueftext, "Prüfung: " + (pruefung.grund || "Noch keine unabhängige Prüfung."));
+  block.append(prueftext);
+  return block;
+}
+
+function kiMeta(stand) {
+  const block = document.createElement("div");
+  block.className = "breit ki-detail";
+  const bericht = stand.meta_bericht || {};
+  const phase = bericht.phasen || {};
+  const kopf = document.createElement("h2");
+  text(kopf, "Meta");
+  const textZeile = document.createElement("p");
+  const namen = Object.keys(bericht.gewichte || {}).map(function (name) { return name + " " + bericht.gewichte[name]; }).join(", ");
+  text(textZeile, "Phase: " + (phase.phase || "nicht gemessen") + ". " + (phase.grund || "") + " Gewichtung: " + (namen || "keine") + ". " + (bericht.hinweis || ""));
+  block.append(kopf, textZeile);
+  (bericht.schwaechen || []).forEach(function (eintrag) {
+    const zeile = document.createElement("p");
+    text(zeile, eintrag.name + ": " + eintrag.grund);
+    block.append(zeile);
+  });
+  return block;
 }
 
 function euroWort(wert) {

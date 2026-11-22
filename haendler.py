@@ -17,10 +17,12 @@ from analyse import rsi, sma
 from technik import macd as macd_rechnung
 from technik import volatilitaet as volatilitaet_rechnung
 
-_KOSTEN = Decimal("0.0025")
+_ANTEIL = Decimal("0.00125")
 _MINDEST = 20
 _SHARPE = 30
+_ZUVERLAESSIG = 12
 _START = Decimal(10000)
+_KENNZAHL = "Nicht ausreichend Daten"
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,40 @@ HAENDLER: tuple[Haendler, ...] = (
 )
 
 
+_PROFIL = {
+    "Momentum": {"daten": "Mindestens 21 Schlusskurse.", "merkmale": "Rendite über 20 und über 5 Tage.", "fehlt": ""},
+    "RSI": {"daten": "Mindestens 15 Schlusskurse.", "merkmale": "RSI geteilt durch 100.", "fehlt": ""},
+    "MACD": {"daten": "Mindestens 35 Schlusskurse oder ein schon berechnetes MACD.", "merkmale": "MACD-Linie und Signallinie.", "fehlt": ""},
+    "Ausbruch": {"daten": "Mindestens 21 Schlusskurse.", "merkmale": "Abstand zum höchsten der vorigen 20 Schlüsse.", "fehlt": ""},
+    "Trend": {"daten": "Mindestens 50 Schlusskurse.", "merkmale": "Abstand zum 50-Tage-Schnitt und ob der kurze Schnitt darüber liegt.", "fehlt": ""},
+    "Gleitend": {"daten": "Mindestens 51 Schlusskurse.", "merkmale": "Kreuzung des 20- über den 50-Tage-Schnitt.", "fehlt": ""},
+    "Volumen": {"daten": "Handelsvolumen je Tag.", "merkmale": "Kein Merkmal, weil das Volumen fehlt.", "fehlt": "Volumen ist nicht gespeichert."},
+    "Volatilität": {"daten": "Schlusskurse für die Tagesstreuung.", "merkmale": "Gemessene Streuung.", "fehlt": ""},
+    "Rücksetzer": {"daten": "Mindestens 200 Schlusskurse.", "merkmale": "Lage zu den Schnitten und RSI.", "fehlt": ""},
+    "Kerze": {"daten": "Eröffnung, Hoch, Tief und Schluss.", "merkmale": "Kein Merkmal, weil nur Schlüsse vorliegen.", "fehlt": "Kerzen fehlen."},
+    "Substanz": {"daten": "Eine Kaufnote aus dem KGV.", "merkmale": "Kein Merkmal.", "fehlt": "KGV ergibt keine Kaufnote."},
+    "Wachstum": {"daten": "Eine Kaufnote aus dem Umsatzwachstum.", "merkmale": "Kein Merkmal.", "fehlt": "Umsatzwachstum ergibt keine Kaufnote."},
+    "Qualität": {"daten": "Eine Kaufnote aus Marge und Rendite.", "merkmale": "Kein Merkmal.", "fehlt": "Qualität ergibt keine Kaufnote."},
+    "Dividende": {"daten": "Eine Kaufnote aus der Dividende.", "merkmale": "Kein Merkmal.", "fehlt": "Dividende ergibt keine Kaufnote."},
+    "Fundament": {"daten": "Mehrere Fundamentalnoten mit Kauf.", "merkmale": "Kein Merkmal.", "fehlt": "Der Mix ergibt keine Kaufnote."},
+    "Nachrichten": {"daten": "Eine Meldung zum Entscheidungszeitpunkt.", "merkmale": "Kein Merkmal. Eine Meldung ist kein Kauf.", "fehlt": "Nachrichten begründen keinen Kauf."},
+    "Stimmung": {"daten": "Der Ton einer Überschrift.", "merkmale": "Kein Merkmal.", "fehlt": "Stimmung begründet keinen Kauf."},
+    "Quartal": {"daten": "Eine Quartalsmeldung.", "merkmale": "Kein Merkmal.", "fehlt": "Quartalsmeldungen begründen keinen Kauf."},
+    "Makro": {"daten": "Eine Makromeldung.", "merkmale": "Kein Merkmal.", "fehlt": "Makromeldungen begründen keinen Kauf."},
+    "Termin": {"daten": "Ein gespeicherter Terminkalender.", "merkmale": "Kein Merkmal.", "fehlt": "Es gibt keinen Terminkalender."},
+    "Krypto": {"daten": "Schlusskurse eines *-USD-Namens.", "merkmale": "Dieselben Momentum-Merkmale.", "fehlt": ""},
+    "ETF": {"daten": "Schlusskurse eines ETF.", "merkmale": "Dieselben Rücksetzer-Merkmale.", "fehlt": ""},
+    "Large": {"daten": "Marktkapitalisierung.", "merkmale": "Kein Merkmal.", "fehlt": "Die Marktkapitalisierung fehlt."},
+    "Small": {"daten": "Marktkapitalisierung.", "merkmale": "Kein Merkmal.", "fehlt": "Die Marktkapitalisierung fehlt."},
+    "Defensiv": {"daten": "Trend und Streuung.", "merkmale": "Trendmerkmale nur bei niedriger Streuung.", "fehlt": ""},
+    "Ensemble": {"daten": "Momentum, Trend, Gleitend und RSI gleichzeitig.", "merkmale": "Anteil der vier Regeln, die kaufen.", "fehlt": ""},
+    "Adaptiv": {"daten": "Mindestens 30 eigene abgeschlossene Fälle.", "merkmale": "RSI, die Schwelle ändert der Lauf nicht.", "fehlt": "Die Schwelle bleibt fest, bis eine eigene Prüfung sie trägt."},
+    "Conträr": {"daten": "RSI und 200 Schlusskurse.", "merkmale": "RSI und Lage zum langen Schnitt.", "fehlt": ""},
+    "Statistik": {"daten": "Gemessenes Muster mit Qualität und Rang.", "merkmale": "Qualität und Rang des Musters.", "fehlt": ""},
+    "Experiment": {"daten": "RSI und 20 Schlusskurse, isoliert.", "merkmale": "RSI und Lage zum kurzen Schnitt.", "fehlt": ""},
+}
+
+
 def von(name: str) -> Haendler | None:
     for haendler in HAENDLER:
         if haendler.name == name:
@@ -84,6 +120,37 @@ def entscheide(name: str, zeile, schluesse: tuple[float, ...] | None = None) -> 
         return "SKIP", f"{haendler.name} handelt nur {haendler.markt}.", None
     funktion = _REGELN[name]
     return funktion(zeile, reihe)
+
+
+def bewerten(pfad, name: str, zeile, schluesse: tuple[float, ...] | None = None) -> tuple[str, str, tuple[float, ...] | None, dict]:
+    """Die Regel bleibt die Bedingung. Die eigenen Gewichte bewerten nur einen Kauf."""
+    entscheidung, grund, merkmale = entscheide(name, zeile, schluesse)
+    stand = {
+        "signal": entscheidung,
+        "version": _version(pfad, name),
+        "wahrscheinlichkeit": None,
+        "zuverlaessig": False,
+    }
+    if entscheidung != "BUY" or not merkmale:
+        return entscheidung, grund, merkmale, stand
+    modell = _modell_lesen(pfad, name)
+    if modell is None or len(modell[0]) != len(merkmale):
+        grund = grund + " Noch keine passenden Gewichte. Nicht zuverlässig."
+        return entscheidung, grund, merkmale, stand
+    from ki import Modell, wahrscheinlichkeit
+
+    chance = wahrscheinlichkeit(Modell(modell[0], modell[1], modell[2]), merkmale)
+    stand["wahrscheinlichkeit"] = round(chance, 4)
+    stand["version"] = modell[3]
+    if modell[2] < _ZUVERLAESSIG:
+        grund = f"{grund} Modell mit {modell[2]} Fällen, nicht zuverlässig."
+        return entscheidung, grund, merkmale, stand
+    stand["zuverlaessig"] = True
+    if chance < 0.5:
+        grund = f"Die Regel würde kaufen. Das eigene Modell liegt bei {chance:.0%} und lässt es."
+        return "HOLD", grund, merkmale, stand
+    grund = f"{grund} Eigenes Modell {chance:.0%}, Version {modell[3]}."
+    return "BUY", grund, merkmale, stand
 
 
 def runde(pfad, zeilen, namen: set[str], kurs, jetzt: datetime, nur_verkauf: bool) -> None:
@@ -111,7 +178,6 @@ def runde(pfad, zeilen, namen: set[str], kurs, jetzt: datetime, nur_verkauf: boo
         eigene = {str(zeile["symbol"]) for zeile in bestand}
         sperre = kauf_gesperrt(cash + _marktwert(pfad, name), *_spitze_konto(pfad, name, cash + _marktwert(pfad, name)), len(eigene))
         stops = {str(zeile["symbol"]): _zahl(zeile.get("stop")) for zeile in bestand}
-        mengen = {str(zeile["symbol"]): _zahl(zeile.get("menge")) for zeile in bestand}
         kauefe = 0
         for zeile in zeilen or ():
             symbol = str(_feld(zeile, "symbol") or "")
@@ -119,45 +185,47 @@ def runde(pfad, zeilen, namen: set[str], kurs, jetzt: datetime, nur_verkauf: boo
                 continue
             preis = _preis_eur(zeile, kurs)
             if preis is None:
-                _notiz(pfad, name, symbol, "SKIP", "Währung oder EUR/USD fehlt. Nicht gekauft.")
+                _notiz(pfad, name, symbol, "SKIP", "Währung oder EUR/USD fehlt. Nicht gekauft.", {"signal": "SKIP"})
                 continue
             if symbol in eigene:
                 stop = stops.get(symbol)
                 if stop is not None and preis <= stop:
-                    _schliessen(pfad, name, symbol, preis, jetzt, "Stop ist erreicht. Lokale Prüfung, keine Broker-Order.")
-                    cash += preis * (mengen.get(symbol) or Decimal(0))
-                    eigene.discard(symbol)
+                    ok, gutschrift = _schliessen(pfad, name, symbol, preis, jetzt, "Stop ist erreicht. Lokale Prüfung, keine Broker-Order.")
+                    if ok:
+                        cash += gutschrift
+                        eigene.discard(symbol)
                     continue
-                entscheidung, grund, _merkmale = entscheide(name, zeile)
+                entscheidung, grund, _merkmale, stand = bewerten(pfad, name, zeile)
                 if entscheidung == "SELL":
-                    _schliessen(pfad, name, symbol, preis, jetzt, grund)
-                    cash += preis * (mengen.get(symbol) or Decimal(0))
-                    eigene.discard(symbol)
+                    ok, gutschrift = _schliessen(pfad, name, symbol, preis, jetzt, grund)
+                    if ok:
+                        cash += gutschrift
+                        eigene.discard(symbol)
                 else:
                     _jetzt_merken(pfad, name, symbol, preis)
-                    _notiz(pfad, name, symbol, "HOLD", grund)
+                    _notiz(pfad, name, symbol, "HOLD", grund, stand)
                 continue
             if nur_verkauf or sperre or kauefe >= 3:
                 continue
             hinweis = _daten_hinweis(zeile)
             if hinweis:
-                _notiz(pfad, name, symbol, "SKIP", hinweis)
+                _notiz(pfad, name, symbol, "SKIP", hinweis, {"signal": "SKIP"})
                 continue
-            entscheidung, grund, merkmale = entscheide(name, zeile)
+            entscheidung, grund, merkmale, stand = bewerten(pfad, name, zeile)
             if entscheidung != "BUY":
-                _notiz(pfad, name, symbol, entscheidung if entscheidung in ("HOLD", "SKIP") else "SKIP", grund)
+                _notiz(pfad, name, symbol, entscheidung if entscheidung in ("HOLD", "SKIP") else "SKIP", grund, stand)
                 continue
             stop_mal = 1 if name == "Defensiv" else 2
             deckel = Decimal("0.04") if name == "Defensiv" else Decimal("0.08")
             kosten = _lokal_kaufen(pfad, name, zeile, preis, kurs, _START, cash, jetzt, stop_mal, deckel)
             if kosten <= 0:
-                _notiz(pfad, name, symbol, "SKIP", "Die Menge passt nicht in Risiko, Cash oder Stückzahl.")
+                _notiz(pfad, name, symbol, "SKIP", "Die Menge passt nicht in Risiko, Cash oder Stückzahl.", stand)
                 continue
-            cash -= kosten
+            cash -= kosten + (kosten * _ANTEIL).quantize(Decimal("0.01"))
             kauefe += 1
             eigene.add(symbol)
-            _fall_offen(pfad, haendler, symbol, merkmale, preis)
-            _notiz(pfad, name, symbol, "BUY", grund)
+            _fall_offen(pfad, haendler, symbol, merkmale, preis, kosten)
+            _notiz(pfad, name, symbol, "BUY", grund, stand)
         _lokal_konto(pfad, name, _START, cash, _marktwert(pfad, name), kurs, jetzt)
 
 
@@ -181,7 +249,10 @@ def uebersicht(pfad) -> dict:
         "schwaechste": schwach,
         "lernen": lernzeit or "noch kein abgeschlossener Lernfall",
         "hinweis": "Simulation, getrennt vom Alpaca-Buch und vom öffentlichen Modell. Unter 20 abgeschlossenen Fällen gibt es keinen Sieger.",
+        "ohne_daten": sum(1 for haendler in HAENDLER if not haendler.einsatz),
+        "belastbar": len(bewertbar),
         "meta": _meta(zeilen),
+        "meta_bericht": _meta_bericht(pfad, zeilen),
         "rangliste": zeilen,
     }
 
@@ -531,29 +602,51 @@ _REGELN = {
 }
 
 
-def _schliessen(pfad, name: str, symbol: str, preis: Decimal, jetzt: datetime, grund: str) -> None:
+def _schliessen(pfad, name: str, symbol: str, preis: Decimal, jetzt: datetime, grund: str) -> tuple[bool, Decimal]:
     from papier import _lokal_verkaufen, _positionen
 
     position = next((eintrag for eintrag in _positionen(pfad, name) if eintrag["symbol"] == symbol), None)
     if position is None:
-        return
-    _lokal_verkaufen(pfad, name, symbol, preis, jetzt)
+        return False, Decimal(0)
+    if not _lokal_verkaufen(pfad, name, symbol, preis, jetzt):
+        _notiz(pfad, name, symbol, "SKIP", "Verkauf nicht ausgeführt. Kein Lernfall.", {"signal": "SELL"})
+        return False, Decimal(0)
     _fall_zu(pfad, name, symbol, position, preis)
-    _notiz(pfad, name, symbol, "SELL", grund)
+    _notiz(pfad, name, symbol, "SELL", grund, {"signal": "SELL"})
+    menge = _zahl(position.get("menge")) or Decimal(0)
+    _brutto, _ein, aus, _netto = _kosten(_zahl(position.get("einstieg")) or Decimal(0), preis, menge)
+    return True, preis * menge - aus
 
 
-def _notiz(pfad, name: str, symbol: str, entscheidung: str, grund: str) -> None:
+def _notiz(pfad, name: str, symbol: str, entscheidung: str, grund: str, stand: dict | None = None) -> None:
+    stand = stand or {}
     _tabellen(pfad)
     with sqlite3.connect(pfad) as verbindung:
         verbindung.execute(
-            "INSERT INTO ki_haendler_entscheidung (haendler, symbol, entscheidung, grund, zeit) VALUES (?, ?, ?, ?, ?)",
-            (name, symbol, entscheidung, grund, _jetzt()),
+            """
+            INSERT INTO ki_haendler_entscheidung
+            (haendler, symbol, entscheidung, grund, zeit, version, signal, wahrscheinlichkeit, zuverlaessig)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                symbol,
+                entscheidung,
+                grund,
+                _jetzt(),
+                stand.get("version"),
+                stand.get("signal") or entscheidung,
+                None if stand.get("wahrscheinlichkeit") is None else str(stand["wahrscheinlichkeit"]),
+                1 if stand.get("zuverlaessig") else 0,
+            ),
         )
 
 
-def _fall_offen(pfad, haendler: Haendler, symbol: str, merkmale, preis: Decimal) -> None:
+def _fall_offen(pfad, haendler: Haendler, symbol: str, merkmale, preis: Decimal, notional: Decimal | None = None) -> None:
     if not merkmale:
         return
+    betrag = notional if notional is not None else preis
+    ein = (betrag * _ANTEIL).quantize(Decimal("0.01")) if betrag is not None else Decimal(0)
     with sqlite3.connect(pfad) as verbindung:
         offen = verbindung.execute(
             "SELECT id FROM ki_haendler_fall WHERE haendler = ? AND symbol = ? AND ausstieg IS NULL",
@@ -564,10 +657,19 @@ def _fall_offen(pfad, haendler: Haendler, symbol: str, merkmale, preis: Decimal)
         verbindung.execute(
             """
             INSERT INTO ki_haendler_fall
-            (haendler, symbol, horizont, merkmale, einstieg, kosten, benchmark, quelle, gelernt, zeit)
-            VALUES (?, ?, ?, ?, ?, 'Annahme 0,25 Prozent des Einstiegs', 'nicht gemessen', 'simulation', 0, ?)
+            (haendler, symbol, horizont, merkmale, einstieg, kosten, benchmark, quelle, gelernt, zeit, gebuehr_einstieg, spread, slippage)
+            VALUES (?, ?, ?, ?, ?, ?, 'nicht gemessen', 'simulation', 0, ?, ?, 'nicht gemessen', 'nicht gemessen')
             """,
-            (haendler.name, symbol, haendler.horizont, json.dumps(list(merkmale)), str(preis), _jetzt()),
+            (
+                haendler.name,
+                symbol,
+                haendler.horizont,
+                json.dumps(list(merkmale)),
+                str(preis),
+                "Annahme 0,125 Prozent vom Einstieg und 0,125 Prozent vom Ausstieg. Spread und Slippage nicht gemessen.",
+                _jetzt(),
+                str(ein),
+            ),
         )
 
 
@@ -576,9 +678,7 @@ def _fall_zu(pfad, name: str, symbol: str, position: dict, preis: Decimal) -> No
     menge = _zahl(position.get("menge"))
     if einstieg is None or menge is None:
         return
-    brutto = (preis - einstieg) * menge
-    gebuehr = (einstieg * menge * _KOSTEN).quantize(Decimal("0.01"))
-    netto = (brutto - gebuehr).quantize(Decimal("0.01"))
+    brutto, ein, aus, netto = _kosten(einstieg, preis, menge)
     with sqlite3.connect(pfad) as verbindung:
         zeile = verbindung.execute(
             """
@@ -590,8 +690,13 @@ def _fall_zu(pfad, name: str, symbol: str, position: dict, preis: Decimal) -> No
         if zeile is None:
             return
         verbindung.execute(
-            "UPDATE ki_haendler_fall SET ausstieg = ?, ergebnis = ? WHERE id = ?",
-            (str(preis), str(netto), zeile[0]),
+            """
+            UPDATE ki_haendler_fall
+            SET ausstieg = ?, ergebnis = ?, brutto = ?, gebuehr_einstieg = ?, gebuehr_ausstieg = ?,
+                spread = 'nicht gemessen', slippage = 'nicht gemessen'
+            WHERE id = ?
+            """,
+            (str(preis), str(netto), str(brutto), str(ein), str(aus), zeile[0]),
         )
     if zeile[2]:
         return
@@ -626,6 +731,30 @@ def _lerne(pfad, name: str, merkmale: tuple[float, ...], ziel: float, fall: int)
         )
         _version_schreiben(verbindung, name, version, json.dumps(neu.gewichte), neu.bias, neu.beispiele, "Lernschritt aus abgeschlossenem Fall")
         verbindung.execute("UPDATE ki_haendler_fall SET gelernt = 1 WHERE id = ?", (fall,))
+
+
+def _kosten(einstieg: Decimal, ausstieg: Decimal, menge: Decimal) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Annahme je Seite 0,125 Prozent. Spread und Slippage sind nicht gemessen."""
+    brutto = ((ausstieg - einstieg) * menge).quantize(Decimal("0.01"))
+    ein = (einstieg * menge * _ANTEIL).quantize(Decimal("0.01"))
+    aus = (ausstieg * menge * _ANTEIL).quantize(Decimal("0.01"))
+    return brutto, ein, aus, (brutto - ein - aus).quantize(Decimal("0.01"))
+
+
+def _modell_lesen(pfad, name: str):
+    if pfad is None or not pfad.exists():
+        return None
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "ki_haendler_modell" not in tabellen:
+            return None
+        zeile = verbindung.execute(
+            "SELECT gewichte, bias, beispiele, version FROM ki_haendler_modell WHERE haendler = ?",
+            (name,),
+        ).fetchone()
+    if zeile is None:
+        return None
+    return tuple(float(wert) for wert in json.loads(zeile[0])), float(zeile[1]), int(zeile[2]), int(zeile[3])
 
 
 def _modell(verbindung, name: str, laenge: int) -> tuple[tuple[float, ...], float, int, int]:
@@ -671,26 +800,38 @@ def _zeile(pfad, haendler: Haendler) -> dict:
         untere = mittel - 1.96 * streuung / math.sqrt(len(renditen))
         belastbar = untere > 0
         score = untere * min(len(netto), 60) / 60
+    sharpe, sortino = _quoten_aus_equity(pfad, haendler.name)
     return {
         "name": haendler.name,
         "gruppe": haendler.gruppe,
         "horizont": haendler.horizont,
         "einsatz": haendler.einsatz,
+        "status": "Wettbewerb" if haendler.einsatz else "pausiert",
+        "markt": haendler.markt,
+        "daten": _PROFIL[haendler.name]["daten"],
+        "merkmale_text": _PROFIL[haendler.name]["merkmale"],
+        "fehlt": _PROFIL[haendler.name]["fehlt"],
         "regel": haendler.regel,
         "version": _version(pfad, haendler.name),
         "trades": len(netto),
-        "quote": "—" if not netto else f"{treffer}/{len(netto)}",
-        "gewinn": "—" if not gewinne else f"{sum(gewinne) / len(gewinne):.2f}",
-        "verlust": "—" if not verluste else f"{sum(verluste) / len(verluste):.2f}",
+        "quote": _KENNZAHL if not netto else f"{treffer}/{len(netto)}",
+        "gewinn": _KENNZAHL if not gewinne else f"{sum(gewinne) / len(gewinne):.2f}",
+        "verlust": _KENNZAHL if not verluste else f"{sum(verluste) / len(verluste):.2f}",
         "ergebnis": f"{sum(netto, Decimal(0)):.2f}" if netto else "0.00",
-        "drawdown": "—" if dd is None else f"{dd:.1%}",
-        "sharpe": _quote(renditen, False),
-        "sortino": _quote(renditen, True),
+        "ergebnis_zahl": float(sum(netto, Decimal(0))) if netto else 0.0,
+        "rendite": _rendite(pfad, haendler.name),
+        "drawdown": _KENNZAHL if dd is None else f"{dd:.1%}",
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "faktor": _faktor(gewinne, verluste, len(netto)),
+        "benchmark": "nicht gemessen",
         "belastbar": belastbar,
         "score": score,
         "platz": platz,
         "quelle": "simulation",
         "letzte": _letzte(pfad, haendler.name),
+        "lernstatus": _lernstatus(pfad, haendler.name),
+        "detail": _detail(pfad, haendler.name),
     }
 
 
@@ -702,16 +843,55 @@ def _meta(zeilen: list[dict]) -> str:
     return f"Nur diese Trader haben eine ausreichende Stichprobe: {namen}. Der höchste Gewinn allein reicht nicht."
 
 
-def _quote(renditen: list[float], nur_unten: bool) -> str:
+def _quoten_aus_equity(pfad, name: str) -> tuple[str, str]:
+    """Veränderung aufeinanderfolgender Equity-Stände. Nicht annualisiert."""
+    werte = _equity_reihe(pfad, name)
+    if len(werte) < _SHARPE + 1:
+        return _KENNZAHL, _KENNZAHL
+    renditen = [(werte[i] - werte[i - 1]) / werte[i - 1] for i in range(1, len(werte)) if werte[i - 1] > 0]
     if len(renditen) < _SHARPE:
-        return "—"
+        return _KENNZAHL, _KENNZAHL
     mittel = sum(renditen) / len(renditen)
-    basis = [min(0.0, wert) for wert in renditen] if nur_unten else [wert - mittel for wert in renditen]
-    streuung = math.sqrt(sum(wert ** 2 for wert in basis) / len(basis))
-    if streuung == 0:
-        return "—"
-    wert = mittel / streuung
-    return f"{wert:.2f} pro Trade"
+    abweichung = [wert - mittel for wert in renditen]
+    unten = [min(0.0, wert) for wert in renditen]
+    streuung = math.sqrt(sum(wert ** 2 for wert in abweichung) / len(abweichung))
+    streuung_unten = math.sqrt(sum(wert ** 2 for wert in unten) / len(unten))
+    sharpe = _KENNZAHL if streuung == 0 else f"{mittel / streuung:.2f} je Stand"
+    sortino = _KENNZAHL if streuung_unten == 0 else f"{mittel / streuung_unten:.2f} je Stand"
+    return sharpe, sortino
+
+
+def _faktor(gewinne: list[Decimal], verluste: list[Decimal], anzahl: int) -> str:
+    if anzahl < _MINDEST or not verluste:
+        return _KENNZAHL
+    summe = abs(sum(verluste, Decimal(0)))
+    if summe == 0:
+        return _KENNZAHL
+    return f"{(sum(gewinne, Decimal(0)) / summe):.2f}"
+
+
+def _rendite(pfad, name: str) -> str:
+    werte = _equity_reihe(pfad, name)
+    if not werte:
+        return _KENNZAHL
+    start = float(_START)
+    if start <= 0:
+        return _KENNZAHL
+    return f"{(werte[-1] / start - 1) * 100:.1f} %"
+
+
+def _equity_reihe(pfad, name: str) -> list[float]:
+    if not pfad.exists():
+        return []
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "paper_konto" not in tabellen:
+            return []
+        zeilen = verbindung.execute(
+            "SELECT equity FROM paper_konto WHERE broker = 'Lokal' AND konto = ? ORDER BY id",
+            (name,),
+        ).fetchall()
+    return [float(zeile[0]) for zeile in zeilen if _zahl(zeile[0]) is not None]
 
 
 def _abgeschlossen(pfad, name: str) -> list[tuple[Decimal, float]]:
@@ -772,11 +952,282 @@ def _letzte(pfad, name: str) -> str:
 
 
 def _version(pfad, name: str) -> int:
-    if not pfad.exists():
+    if pfad is None or not pfad.exists():
         return 1
     with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "ki_haendler_modell" not in tabellen:
+            return 1
         zeile = verbindung.execute("SELECT version FROM ki_haendler_modell WHERE haendler = ?", (name,)).fetchone()
     return 1 if zeile is None else int(zeile[0])
+
+
+def _lernstatus(pfad, name: str) -> str:
+    modell = _modell_lesen(pfad, name)
+    if modell is None or modell[2] < _ZUVERLAESSIG:
+        zahl = 0 if modell is None else modell[2]
+        return f"{zahl} Fälle, nicht zuverlässig"
+    return f"{modell[2]} Fälle, Version {modell[3]}"
+
+
+def _detail(pfad, name: str) -> dict:
+    konto = _kontostand(pfad, name)
+    return {
+        "start": f"{_START:.2f}",
+        "equity": konto["equity"],
+        "cash": konto["cash"],
+        "offen": konto["offen"],
+        "geschlossen": _geschlossen(pfad, name),
+        "verlauf": _equity_reihe(pfad, name)[-60:],
+        "entscheidungen": _entscheidungen(pfad, name),
+        "versionen": _versionen(pfad, name),
+        "pruefung": _letzte_pruefung(pfad, name),
+    }
+
+
+def _kontostand(pfad, name: str) -> dict:
+    from papier import _lokales_guthaben, _positionen
+
+    _sleeve, cash, _equity = _lokales_guthaben(pfad, name) if pfad.exists() else (_START, _START, _START)
+    offen = []
+    if pfad.exists():
+        for zeile in _positionen(pfad, name):
+            offen.append({"symbol": zeile["symbol"], "menge": zeile["menge"], "einstieg": zeile["einstieg"]})
+    return {"equity": f"{_equity:.2f}", "cash": f"{cash:.2f}", "offen": offen}
+
+
+def _geschlossen(pfad, name: str) -> list[dict]:
+    if not pfad.exists():
+        return []
+    with sqlite3.connect(pfad) as verbindung:
+        zeilen = verbindung.execute(
+            """
+            SELECT symbol, ergebnis, brutto, zeit FROM ki_haendler_fall
+            WHERE haendler = ? AND ausstieg IS NOT NULL AND quelle = 'simulation'
+            ORDER BY id DESC LIMIT 8
+            """,
+            (name,),
+        ).fetchall()
+    return [{"symbol": zeile[0], "ergebnis": zeile[1], "brutto": zeile[2], "zeit": zeile[3]} for zeile in zeilen]
+
+
+def _entscheidungen(pfad, name: str) -> list[dict]:
+    if not pfad.exists():
+        return []
+    with sqlite3.connect(pfad) as verbindung:
+        zeilen = verbindung.execute(
+            """
+            SELECT zeit, entscheidung, grund, version, signal, wahrscheinlichkeit, zuverlaessig
+            FROM ki_haendler_entscheidung WHERE haendler = ? ORDER BY id DESC LIMIT 8
+            """,
+            (name,),
+        ).fetchall()
+    return [
+        {
+            "zeit": zeile[0],
+            "entscheidung": zeile[1],
+            "grund": zeile[2],
+            "version": zeile[3],
+            "signal": zeile[4],
+            "wahrscheinlichkeit": zeile[5],
+            "zuverlaessig": bool(zeile[6]),
+        }
+        for zeile in zeilen
+    ]
+
+
+def _versionen(pfad, name: str) -> list[dict]:
+    if not pfad.exists():
+        return []
+    with sqlite3.connect(pfad) as verbindung:
+        zeilen = verbindung.execute(
+            """
+            SELECT version, beispiele, grund, zeit FROM ki_haendler_version
+            WHERE haendler = ? ORDER BY id DESC LIMIT 5
+            """,
+            (name,),
+        ).fetchall()
+    return [{"version": zeile[0], "beispiele": zeile[1], "grund": zeile[2], "zeit": zeile[3]} for zeile in zeilen]
+
+
+def _letzte_pruefung(pfad, name: str) -> dict:
+    if not pfad.exists():
+        return {"besser": False, "grund": "Noch keine unabhängige Prüfung."}
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "ki_haendler_pruefung" not in tabellen:
+            return {"besser": False, "grund": "Noch keine unabhängige Prüfung."}
+        zeile = verbindung.execute(
+            """
+            SELECT besser, grund, test_n, zeit FROM ki_haendler_pruefung
+            WHERE haendler = ? ORDER BY id DESC LIMIT 1
+            """,
+            (name,),
+        ).fetchone()
+    if zeile is None:
+        return {"besser": False, "grund": "Noch keine unabhängige Prüfung."}
+    return {"besser": bool(zeile[0]), "grund": zeile[1], "test": zeile[2], "zeit": zeile[3]}
+
+
+def pruefe(pfad, name: str) -> dict:
+    """Trainiert nur auf früheren Fällen und prüft spätere. Das aktive Modell bleibt unverändert."""
+    _tabellen(pfad)
+    with sqlite3.connect(pfad) as verbindung:
+        zeilen = verbindung.execute(
+            """
+            SELECT id, merkmale, ergebnis, zeit FROM ki_haendler_fall
+            WHERE haendler = ? AND ausstieg IS NOT NULL AND quelle = 'simulation'
+            ORDER BY id
+            """,
+            (name,),
+        ).fetchall()
+    faelle = []
+    for nummer, merkmale, ergebnis, zeit in zeilen:
+        try:
+            werte = tuple(float(wert) for wert in json.loads(merkmale))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        netto = _zahl(ergebnis)
+        if not werte or netto is None:
+            continue
+        faelle.append((int(nummer), werte, 1.0 if netto > 0 else 0.0, float(netto), str(zeit)))
+    if len(faelle) < 24:
+        bericht = {"besser": False, "grund": "Weniger als 24 abgeschlossene Fälle. Keine Verbesserung.", "test_n": 0}
+        _pruefung_speichern(pfad, name, bericht)
+        return bericht
+    schnitt = len(faelle) // 2
+    training = faelle[:schnitt]
+    test = faelle[schnitt:]
+    if test[0][0] <= training[-1][0]:
+        bericht = {"besser": False, "grund": "Testfälle liegen nicht nach dem Training.", "test_n": len(test)}
+        _pruefung_speichern(pfad, name, bericht)
+        return bericht
+    from ki import Modell, schritt, wahrscheinlichkeit
+
+    modell = Modell((0.0,) * len(training[0][1]), 0.0, 0)
+    for _nummer, werte, ziel, _netto, _zeit in training:
+        if len(werte) != len(modell.gewichte):
+            continue
+        modell = schritt(modell, werte, ziel)
+    treffer = 0
+    genommen = []
+    for _nummer, werte, ziel, netto, _zeit in test:
+        if len(werte) != len(modell.gewichte):
+            continue
+        chance = wahrscheinlichkeit(modell, werte)
+        if (chance >= 0.5) == (ziel == 1.0):
+            treffer += 1
+        if chance >= 0.5:
+            genommen.append(netto)
+    basis = sum(fall[2] for fall in training) / len(training)
+    quote = treffer / len(test)
+    verlauf = 0.0
+    spitze = 0.0
+    tief = 0.0
+    for netto in (fall[3] for fall in test):
+        verlauf += netto
+        spitze = max(spitze, verlauf)
+        tief = max(tief, spitze - verlauf)
+    risiko_ok = spitze > 0 and tief / spitze <= 0.08
+    besser = quote > basis and quote > 0.5 and risiko_ok and len(test) >= 12
+    grund = (
+        f"Test {quote:.0%} gegen Trainingsbasis {basis:.0%}. "
+        f"Drawdown der Testfälle {tief:.2f}. "
+        + ("Besser auf späteren Fällen." if besser else "Keine übernommene Verbesserung.")
+    )
+    bericht = {"besser": besser, "grund": grund, "test_n": len(test), "train_bis": training[-1][0], "test_ab": test[0][0]}
+    _pruefung_speichern(pfad, name, bericht)
+    return bericht
+
+
+def _pruefung_speichern(pfad, name: str, bericht: dict) -> None:
+    with sqlite3.connect(pfad) as verbindung:
+        verbindung.execute(
+            """
+            INSERT INTO ki_haendler_pruefung (haendler, besser, grund, test_n, train_bis, test_ab, zeit)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                1 if bericht["besser"] else 0,
+                bericht["grund"],
+                bericht.get("test_n", 0),
+                bericht.get("train_bis"),
+                bericht.get("test_ab"),
+                _jetzt(),
+            ),
+        )
+
+
+def _meta_bericht(pfad, zeilen: list[dict]) -> dict:
+    phasen = _phasen(pfad)
+    belastbar = [zeile for zeile in zeilen if zeile["belastbar"]]
+    if belastbar:
+        summe = sum(max(zeile["score"], 0.0) for zeile in belastbar) or 1.0
+        gewichte = {zeile["name"]: round(max(zeile["score"], 0.0) / summe, 2) for zeile in belastbar}
+        hinweis = "Vorschlag aus der Stichprobe. Keine Order und keine Änderung der Risikogrenzen."
+    else:
+        gewichte = {}
+        hinweis = "Keine Gewichtung. Unter 20 Fällen mit positivem unterem Rand gibt es keinen Sieger."
+    schwaechen = [
+        {"name": zeile["name"], "grund": zeile["fehlt"] or "Stichprobe oder unterer Rand reicht nicht."}
+        for zeile in zeilen
+        if not zeile["belastbar"]
+    ]
+    bericht = {
+        "phasen": phasen,
+        "gewichte": gewichte,
+        "hinweis": hinweis,
+        "schwaechen": schwaechen[:8],
+        "unzuverlaessig": [zeile["name"] for zeile in zeilen if not zeile["belastbar"]],
+        "quelle": "simulation",
+    }
+    _meta_speichern(pfad, bericht)
+    return bericht
+
+
+def _phasen(pfad) -> dict:
+    if not pfad.exists():
+        return {"phase": "nicht gemessen", "grund": "Keine Kursreihe."}
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "kurse" not in tabellen:
+            return {"phase": "nicht gemessen", "grund": "Keine Kursreihe."}
+        for symbol in ("^GDAXI", "^GSPC"):
+            zeilen = verbindung.execute(
+                "SELECT schluss FROM kurse WHERE symbol = ? ORDER BY zeit",
+                (symbol,),
+            ).fetchall()
+            schluesse = [float(zeile[0]) for zeile in zeilen if zeile[0] is not None and float(zeile[0]) > 0]
+            if len(schluesse) >= 21:
+                return _phase_aus(symbol, schluesse)
+    return {"phase": "nicht gemessen", "grund": "Indexreihe zu kurz oder nicht gespeichert."}
+
+
+def _phase_aus(symbol: str, schluesse: list[float]) -> dict:
+    rendite = schluesse[-1] / schluesse[-21] - 1
+    aenderungen = [schluesse[i] / schluesse[i - 1] - 1 for i in range(1, len(schluesse)) if schluesse[i - 1] > 0]
+    streuung = math.sqrt(sum(wert ** 2 for wert in aenderungen[-20:]) / max(1, len(aenderungen[-20:])))
+    if rendite <= -0.02:
+        phase = "fallend"
+    elif streuung >= 0.02:
+        phase = "volatil"
+    elif rendite >= 0.02:
+        phase = "steigend"
+    else:
+        phase = "seitwaerts"
+    return {"phase": phase, "symbol": symbol, "rendite_20": round(rendite, 4), "grund": "Aus gespeicherten Indexschlüssen."}
+
+
+def _meta_speichern(pfad, bericht: dict) -> None:
+    if not pfad.exists():
+        return
+    text = json.dumps(bericht, ensure_ascii=False)
+    with sqlite3.connect(pfad) as verbindung:
+        letzte = verbindung.execute("SELECT text FROM ki_haendler_meta ORDER BY id DESC LIMIT 1").fetchone()
+        if letzte is not None and letzte[0] == text:
+            return
+        verbindung.execute("INSERT INTO ki_haendler_meta (text, zeit) VALUES (?, ?)", (text, _jetzt()))
 
 
 def _letzte_lernzeit(pfad) -> str:
@@ -848,6 +1299,14 @@ def _tabellen(pfad) -> None:
             """
         )
         verbindung.execute("CREATE INDEX IF NOT EXISTS ki_haendler_fall_name ON ki_haendler_fall (haendler, quelle)")
+        for name, typ in (
+            ("brutto", "TEXT"),
+            ("gebuehr_einstieg", "TEXT"),
+            ("gebuehr_ausstieg", "TEXT"),
+            ("spread", "TEXT"),
+            ("slippage", "TEXT"),
+        ):
+            _spalte(verbindung, "ki_haendler_fall", name, typ)
         verbindung.execute(
             """
             CREATE TABLE IF NOT EXISTS ki_haendler_entscheidung (
@@ -860,6 +1319,42 @@ def _tabellen(pfad) -> None:
             )
             """
         )
+        for name, typ in (
+            ("version", "INTEGER"),
+            ("signal", "TEXT"),
+            ("wahrscheinlichkeit", "TEXT"),
+            ("zuverlaessig", "INTEGER"),
+        ):
+            _spalte(verbindung, "ki_haendler_entscheidung", name, typ)
+        verbindung.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ki_haendler_pruefung (
+                id INTEGER PRIMARY KEY,
+                haendler TEXT NOT NULL,
+                besser INTEGER NOT NULL,
+                grund TEXT NOT NULL,
+                test_n INTEGER NOT NULL,
+                train_bis INTEGER,
+                test_ab INTEGER,
+                zeit TEXT NOT NULL
+            )
+            """
+        )
+        verbindung.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ki_haendler_meta (
+                id INTEGER PRIMARY KEY,
+                text TEXT NOT NULL,
+                zeit TEXT NOT NULL
+            )
+            """
+        )
+
+
+def _spalte(verbindung, tabelle: str, name: str, typ: str) -> None:
+    vorhanden = {str(zeile[1]) for zeile in verbindung.execute(f"PRAGMA table_info({tabelle})")}
+    if name not in vorhanden:
+        verbindung.execute(f"ALTER TABLE {tabelle} ADD COLUMN {name} {typ}")
 
 
 def _reihe(zeile) -> tuple[float, ...]:

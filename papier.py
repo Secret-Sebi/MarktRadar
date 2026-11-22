@@ -647,13 +647,13 @@ def _lokal_kaufen(pfad, konto: str, zeile, preis: Decimal, kurs, sleeve: Decimal
     return stueck * preis
 
 
-def _lokal_verkaufen(pfad, konto: str, symbol: str, preis: Decimal, jetzt: datetime) -> None:
+def _lokal_verkaufen(pfad, konto: str, symbol: str, preis: Decimal, jetzt: datetime) -> bool:
     position = next((eintrag for eintrag in _positionen(pfad, konto) if eintrag["symbol"] == symbol), None)
     if position is None:
-        return
+        return False
     kennung = _kennung(symbol, konto + "verkauf", jetzt)
     if _bekannt(pfad, kennung):
-        return
+        return False
     auftrag = {
         "symbol": symbol,
         "qty": position["menge"],
@@ -665,6 +665,7 @@ def _lokal_verkaufen(pfad, konto: str, symbol: str, preis: Decimal, jetzt: datet
     _order_merken(pfad, auftrag, "lokal", "lokale Simulation", None, None, jetzt, "")
     _ereignis(pfad, kennung, "lokale Simulation", position["menge"], "lokal")
     _buch_verkaufen(pfad, konto, symbol, position["menge"], str(preis))
+    return True
 
 
 def _lokal_konto(pfad, konto: str, sleeve: Decimal, cash: Decimal, markt: Decimal, kurs, jetzt: datetime) -> None:
