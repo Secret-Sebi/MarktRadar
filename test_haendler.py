@@ -701,30 +701,25 @@ class HaendlerTests(unittest.TestCase):
         import subprocess
 
         quelle = Path("fenster_app/seite.html").read_text()
-        funktion = quelle[quelle.index("function kiListe"):quelle.index("function detailBlick")]
+        funktion = quelle[quelle.index("function traderListe"):quelle.index("function traderSeite")]
         script = (
             "const quelle = " + repr(quelle) + ";\n"
-            "let kiSuche = '';\nlet kiFilter = 'alle';\nlet kiSort = 'name';\nlet kiRichtung = 'auf';\n"
+            "function zahl(wert) { return typeof wert === 'number' && Number.isFinite(wert); }\n"
             + funktion
             + """
-            kiSuche = "rsi";
-            kiSort = "rendite_zahl";
-            kiRichtung = "ab";
-            const stand = {rangliste: [
+            const stand = [
               {name:"RSI", einsatz:true, horizont:"kurz", gruppe:"Technik", belastbar:false, rendite_zahl: 1.5},
               {name:"Momentum", einsatz:true, horizont:"mittel", gruppe:"Technik", belastbar:false, rendite_zahl: 20},
               {name:"RSI Trend", einsatz:false, horizont:"lang", gruppe:"Technik", belastbar:false, rendite_zahl: null}
-            ]};
-            const gesucht = kiListe(stand, true).map(function (zeile) { return zeile.name; });
+            ];
+            const gesucht = traderListe(stand, "rsi", "alle", "rendite_zahl", "ab").map(function (zeile) { return zeile.name; });
             if (gesucht.join(",") !== "RSI,RSI Trend") throw new Error("suche " + gesucht.join(","));
-            kiSuche = "";
-            const sortiert = kiListe(stand, true).map(function (zeile) { return zeile.name; });
+            const sortiert = traderListe(stand, "", "alle", "rendite_zahl", "ab").map(function (zeile) { return zeile.name; });
             if (sortiert.join(",") !== "Momentum,RSI,RSI Trend") throw new Error("sort " + sortiert.join(","));
-            kiFilter = "pausiert";
-            const pausiert = kiListe(stand, false).map(function (zeile) { return zeile.name; });
+            const pausiert = traderListe(stand, "", "pausiert", "name", "ab").map(function (zeile) { return zeile.name; });
             if (pausiert.join(",") !== "RSI Trend") throw new Error("filter " + pausiert.join(","));
-            if (quelle.indexOf("Der Zeitraum filtert nur die Diagramme") < 0) throw new Error("zeit");
-            if (quelle.indexOf("kiSuche = suche.value") < 0) throw new Error("eingabe");
+            if (quelle.indexOf("180 Tage") < 0) throw new Error("zeit");
+            if (quelle.indexOf('id="suche"') < 0) throw new Error("eingabe");
             """
         )
         ergebnis = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)

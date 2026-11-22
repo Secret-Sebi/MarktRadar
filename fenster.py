@@ -387,6 +387,7 @@ def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0
     stand["prognosen"] = _prognosen()
     stand["prognose_qualitaet"] = _prognose_qualitaet()
     stand["abdeckung"] = _abdeckung()
+    stand["bestand"] = _bestand(moment)
     try:
         from papier import ansicht
 
@@ -491,6 +492,17 @@ def _prognose_qualitaet() -> dict:
         return qualitaet(DATENBANK)
     except (OSError, sqlite3.Error):
         return {"status": "Nicht ausreichend Daten", "text": TEXT, "anzahl": 0, "erfolg": None, "brier": None}
+
+
+def _bestand(moment) -> dict:
+    from auswertung import bestand
+    from universum import lade_universum
+
+    try:
+        symbole, _hinweis = lade_universum(lade_liste(LISTE), _CACHE)
+        return bestand(DATENBANK, symbole, int(moment.timestamp()))
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return {"zeilen": [], "universum": 0}
 
 
 def _abdeckung() -> dict:

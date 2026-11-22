@@ -9,6 +9,7 @@ from pathlib import Path
 from analyse import ist_wichtig
 from auswertung import (
     alle,
+    bestand,
     chancen_nachtragen,
     faellig,
     merken,
@@ -209,6 +210,47 @@ class UniversumTests(unittest.TestCase):
             self.assertEqual(sende_hinweise(pfad, (karte,), ("SAP.DE",), lambda titel, text: texte.append((titel, text))), 0)
         self.assertIn("NVIDIA ist ungewöhnlich", texte[0][0])
         self.assertIn("kein Auftrag", texte[0][1])
+
+    def test_bestand_trennt_analysiert_veraltet_und_ausstehend(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            jetzt = int(time.time())
+            merken(
+                pfad,
+                (
+                    {
+                        "symbol": "SAP.DE",
+                        "name": "SAP",
+                        "preis": "100 EUR",
+                        "tag": "+1 %",
+                        "tag_wert": 1,
+                        "richtung": "hoch",
+                        "herkunft": "Yahoo",
+                        "datenstatus": "ok",
+                        "bereich": "Deutschland",
+                        "kurszeit": jetzt,
+                    },
+                    {
+                        "symbol": "AMD",
+                        "name": "AMD",
+                        "preis": "90 EUR",
+                        "tag": "-2 %",
+                        "tag_wert": -2,
+                        "richtung": "runter",
+                        "herkunft": "Yahoo",
+                        "datenstatus": "ok",
+                        "bereich": "USA",
+                        "kurszeit": jetzt - 20 * 86400,
+                    },
+                ),
+            )
+            bild = bestand(pfad, ("SAP.DE", "AMD", "SIE.DE"), jetzt)
+        lagen = {zeile["symbol"]: zeile["lage"] for zeile in bild["zeilen"]}
+        self.assertEqual(lagen["SAP.DE"], "analysiert")
+        self.assertEqual(lagen["AMD"], "veraltet")
+        self.assertEqual(lagen["SIE.DE"], "ausstehend")
+        self.assertIsNone(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SIE.DE")["preis"])
+        self.assertIsNone(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SAP.DE")["aufwaerts"])
 
     def _verboten(self, *args, **kwargs):
         raise AssertionError("Netz")
