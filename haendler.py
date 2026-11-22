@@ -255,7 +255,7 @@ def uebersicht(pfad) -> dict:
         "meta": _meta(zeilen),
         "meta_bericht": _meta_bericht(pfad, zeilen),
         "rangliste": zeilen,
-        "zentrale": _zentrale(zeilen),
+        "zentrale": _zentrale(pfad, zeilen),
     }
 
 
@@ -695,10 +695,10 @@ def _fall_zu(pfad, name: str, symbol: str, position: dict, preis: Decimal) -> No
             """
             UPDATE ki_haendler_fall
             SET ausstieg = ?, ergebnis = ?, brutto = ?, gebuehr_einstieg = ?, gebuehr_ausstieg = ?,
-                spread = 'nicht gemessen', slippage = 'nicht gemessen', ausstieg_zeit = ?
+                spread = 'nicht gemessen', slippage = 'nicht gemessen', ausstieg_zeit = ?, menge = ?
             WHERE id = ?
             """,
-            (str(preis), str(netto), str(brutto), str(ein), str(aus), _jetzt(), zeile[0]),
+            (str(preis), str(netto), str(brutto), str(ein), str(aus), _jetzt(), str(menge), zeile[0]),
         )
     if zeile[2]:
         return
@@ -788,9 +788,7 @@ def _version_schreiben(verbindung, name: str, version: int, gewichte: str, bias:
 def _zeile(pfad, haendler: Haendler) -> dict:
     faelle = _abgeschlossen(pfad, haendler.name)
     netto = [fall[0] for fall in faelle]
-    treffer = sum(1 for wert in netto if wert > 0)
-    gewinne = [wert for wert in netto if wert > 0]
-    verluste = [wert for wert in netto if wert < 0]
+    rechnung = kennzahlen_aus(netto)
     renditen = [fall[1] for fall in faelle]
     dd = _drawdown(pfad, haendler.name)
     score = 0.0
@@ -817,17 +815,17 @@ def _zeile(pfad, haendler: Haendler) -> dict:
         "fehlt": _PROFIL[haendler.name]["fehlt"],
         "regel": haendler.regel,
         "version": _version(pfad, haendler.name),
-        "trades": len(netto),
-        "quote": _KENNZAHL if not netto else f"{treffer}/{len(netto)}",
-        "gewinn": _KENNZAHL if not gewinne else f"{sum(gewinne) / len(gewinne):.2f}",
-        "verlust": _KENNZAHL if not verluste else f"{sum(verluste) / len(verluste):.2f}",
-        "ergebnis": f"{sum(netto, Decimal(0)):.2f}" if netto else "0.00",
-        "ergebnis_zahl": float(sum(netto, Decimal(0))) if netto else 0.0,
+        "trades": rechnung["trades"],
+        "quote": rechnung["quote"],
+        "gewinn": rechnung["gewinn_text"],
+        "verlust": rechnung["verlust_text"],
+        "ergebnis": rechnung["ergebnis_text"],
+        "ergebnis_zahl": rechnung["realisiert"],
         "rendite": _rendite(pfad, haendler.name),
         "drawdown": _KENNZAHL if dd is None else f"{dd:.1%}",
         "sharpe": sharpe,
         "sortino": sortino,
-        "faktor": _faktor(gewinne, verluste, len(netto)),
+        "faktor": rechnung["faktor_text"],
         "benchmark": "nicht gemessen",
         "belastbar": belastbar,
         "score": score,
@@ -836,16 +834,16 @@ def _zeile(pfad, haendler: Haendler) -> dict:
         "letzte": _letzte(pfad, haendler.name),
         "lernstatus": _lernstatus(pfad, haendler.name),
         "detail": detail,
-        "treffer_zahl": treffer,
-        "verlust_zahl": len(verluste),
-        "erfolg_zahl": None if not netto else treffer / len(netto),
-        "erfolg": _KENNZAHL if not netto else f"{treffer / len(netto) * 100:.1f} % aus {len(netto)} Trades",
+        "treffer_zahl": rechnung["treffer"],
+        "verlust_zahl": rechnung["verluste"],
+        "erfolg_zahl": rechnung["erfolg"],
+        "erfolg": rechnung["erfolg_text"],
         "rendite_zahl": _rendite_zahl(pfad, haendler.name),
         "dd_zahl": dd,
-        "faktor_zahl": _faktor_zahl(gewinne, verluste, len(netto)),
-        "realisiert_zahl": None if not netto else float(sum(netto, Decimal(0))),
-        "gewinn_summe": float(sum(gewinne, Decimal(0))) if gewinne else 0.0,
-        "verlust_summe": float(sum(verluste, Decimal(0))) if verluste else 0.0,
+        "faktor_zahl": rechnung["faktor"],
+        "realisiert_zahl": rechnung["realisiert"],
+        "gewinn_summe": rechnung["gewinn_summe"],
+        "verlust_summe": rechnung["verlust_summe"],
         "unrealisiert_zahl": _unrealisiert(detail.get("offen") or []),
         "letzter": _letzter_trade(pfad, haendler.name),
         "haltung": _haltung(pfad, haendler.name),
@@ -862,29 +860,66 @@ def _rendite_zahl(pfad, name: str) -> float | None:
     return (werte[-1] / float(_START) - 1) * 100
 
 
-def _faktor_zahl(gewinne: list[Decimal], verluste: list[Decimal], anzahl: int) -> float | None:
-    if anzahl < _MINDEST or not verluste:
-        return None
-    summe = abs(sum(verluste, Decimal(0)))
-    if summe == 0:
-        return None
-    return float(sum(gewinne, Decimal(0)) / summe)
-
-
 def _unrealisiert(offen: list[dict]) -> float | None:
+    if not offen:
+        return None
+    if any(zeile.get("kurs_fehlt") for zeile in offen):
+        return None
     summe = Decimal(0)
-    gesehen = False
     for zeile in offen:
         einstieg = _zahl(zeile.get("einstieg"))
         jetzt = _zahl(zeile.get("jetzt"))
         menge = _zahl(zeile.get("menge"))
         if einstieg is None or jetzt is None or menge is None:
-            continue
+            return None
         summe += (jetzt - einstieg) * menge
-        gesehen = True
-    if not gesehen:
-        return None
     return float(summe)
+
+
+def kennzahlen_aus(netto: list[Decimal]) -> dict:
+    """Eine Rechnung für Dashboard, Rangliste und Trader-Detail."""
+    if not netto:
+        return {
+            "trades": 0,
+            "treffer": None,
+            "verluste": None,
+            "erfolg": None,
+            "erfolg_text": "Keine Daten",
+            "quote": "Keine Daten",
+            "realisiert": None,
+            "gewinn_text": "Keine Daten",
+            "verlust_text": "Keine Daten",
+            "gewinn_summe": None,
+            "verlust_summe": None,
+            "faktor": None,
+            "faktor_text": "Keine Daten",
+            "ergebnis_text": "Keine Daten",
+        }
+    treffer = [wert for wert in netto if wert > 0]
+    verluste = [wert for wert in netto if wert < 0]
+    summe = sum(netto, Decimal(0))
+    gewinn_summe = sum(treffer, Decimal(0))
+    verlust_summe = sum(verluste, Decimal(0))
+    erfolg = len(treffer) / len(netto)
+    faktor = None
+    if len(netto) >= _MINDEST and verlust_summe < 0:
+        faktor = float(gewinn_summe / abs(verlust_summe))
+    return {
+        "trades": len(netto),
+        "treffer": len(treffer),
+        "verluste": len(verluste),
+        "erfolg": erfolg,
+        "erfolg_text": f"{erfolg * 100:.1f} % aus {len(netto)} Trades",
+        "quote": f"{len(treffer)}/{len(netto)}",
+        "realisiert": float(summe),
+        "gewinn_text": "Keine Daten" if not treffer else f"{gewinn_summe / len(treffer):.2f}",
+        "verlust_text": "Keine Daten" if not verluste else f"{verlust_summe / len(verluste):.2f}",
+        "gewinn_summe": float(gewinn_summe),
+        "verlust_summe": float(verlust_summe),
+        "faktor": faktor,
+        "faktor_text": "Nicht ausreichend Daten" if faktor is None else f"{faktor:.2f}",
+        "ergebnis_text": f"{summe:.2f}",
+    }
 
 
 def _letzter_trade(pfad, name: str) -> str:
@@ -919,10 +954,9 @@ def _haltung(pfad, name: str) -> str:
         ).fetchall()
     dauer = []
     for start, ende in zeilen:
-        try:
-            beginn = datetime.fromisoformat(start)
-            schluss = datetime.fromisoformat(ende)
-        except ValueError:
+        beginn = _zeit_lesen(start)
+        schluss = _zeit_lesen(ende)
+        if beginn is None or schluss is None:
             continue
         dauer.append((schluss - beginn).total_seconds())
     if not dauer:
@@ -948,37 +982,207 @@ def _serie(netto: list[Decimal]) -> str:
     return f"{gewinn} Gewinne, {verlust} Verluste in Folge"
 
 
-def _zentrale(zeilen: list[dict]) -> dict:
+def _zentrale(pfad, zeilen: list[dict]) -> dict:
     trades = sum(zeile["trades"] for zeile in zeilen)
-    treffer = sum(zeile["treffer_zahl"] for zeile in zeilen)
-    buecher = [zeile for zeile in zeilen if (zeile.get("detail") or {}).get("hat_buch")]
-    equity = [zeile["rendite_zahl"] for zeile in zeilen if zeile["rendite_zahl"] is not None]
+    treffer = sum(zeile["treffer_zahl"] or 0 for zeile in zeilen)
+    gewinn_summe = sum(zeile["gewinn_summe"] for zeile in zeilen if zeile["gewinn_summe"] is not None)
+    verlust_summe = sum(zeile["verlust_summe"] for zeile in zeilen if zeile["verlust_summe"] is not None)
     realisiert = [zeile["realisiert_zahl"] for zeile in zeilen if zeile["realisiert_zahl"] is not None]
-    unrealisiert = [zeile["unrealisiert_zahl"] for zeile in zeilen if zeile["unrealisiert_zahl"] is not None]
-    gewinn_summe = sum(zeile.get("gewinn_summe") or 0 for zeile in zeilen)
-    verlust_summe = abs(sum(zeile.get("verlust_summe") or 0 for zeile in zeilen))
-    drawdowns = [zeile["dd_zahl"] for zeile in zeilen if zeile["dd_zahl"] is not None]
+    kurs_fehlt = any(
+        any(position.get("kurs_fehlt") for position in (zeile.get("detail") or {}).get("offen") or [])
+        for zeile in zeilen
+    )
+    unrealisiert = None if kurs_fehlt else [
+        zeile["unrealisiert_zahl"] for zeile in zeilen if zeile["unrealisiert_zahl"] is not None
+    ]
     kurven = []
     for zeile in zeilen:
         punkte = (zeile.get("detail") or {}).get("punkte") or []
         if len(punkte) >= 2:
             kurven.append({"name": zeile["name"], "punkte": punkte})
+    gesamt = _gesamt_punkte(pfad)
+    buecher = _letzte_buecher(pfad)
+    kapital = None if not buecher else _START * len(buecher)
+    equity = None if not buecher or any(buch["equity"] is None for buch in buecher) else sum(buch["equity"] for buch in buecher)
+    cash = None if not buecher or any(buch["cash"] is None for buch in buecher) else sum(buch["cash"] for buch in buecher)
+    rendite = None if kapital is None or equity is None or kapital <= 0 else (equity / kapital - 1) * 100
+    tief = _drawdown_aus([punkt["equity"] for punkt in gesamt])
+    faktor = None
+    if trades >= _MINDEST and verlust_summe < 0:
+        faktor = gewinn_summe / abs(verlust_summe)
     return {
         "trades": trades,
-        "kapital": "Keine Daten" if not buecher else f"{len(buecher) * float(_START):.2f}",
-        "equity": "Keine Daten" if not buecher else f"{sum(float(zeile['detail']['equity']) for zeile in buecher):.2f}",
-        "cash": "Keine Daten" if not buecher else f"{sum(float(zeile['detail']['cash']) for zeile in buecher):.2f}",
+        "kapital": "Keine Daten" if kapital is None else f"{kapital:.2f}",
+        "equity": "Keine Daten" if equity is None else f"{equity:.2f}",
+        "cash": "Keine Daten" if cash is None else f"{cash:.2f}",
         "erfolg": "Keine Daten" if trades == 0 else f"{treffer / trades * 100:.1f} % aus {trades} abgeschlossenen Trades",
         "realisiert": "Keine Daten" if not realisiert else f"{sum(realisiert):.2f}",
         "unrealisiert": "Keine Daten" if not unrealisiert else f"{sum(unrealisiert):.2f}",
-        "rendite": "Keine Daten" if not equity else f"{sum(equity) / len(equity):.1f} %",
-        "drawdown": "Keine Daten" if not drawdowns else f"{max(drawdowns):.1%}",
-        "faktor": "Keine Daten" if trades == 0 else ("Nicht ausreichend Daten" if trades < _MINDEST or verlust_summe == 0 else f"{gewinn_summe / verlust_summe:.2f}"),
-        "equity_buecher": sum(1 for zeile in zeilen if zeile["rendite_zahl"] is not None),
+        "rendite": "Keine Daten" if rendite is None else f"{rendite:.1f} %",
+        "drawdown": "Keine Daten" if tief is None else f"{tief:.1%}",
+        "faktor": "Keine Daten" if trades == 0 else ("Nicht ausreichend Daten" if faktor is None else f"{faktor:.2f}"),
+        "equity_buecher": len(buecher),
         "offen": sum(len((zeile.get("detail") or {}).get("offen") or []) for zeile in zeilen),
         "kurven": kurven,
-        "hinweis": "Nur abgeschlossene Simulationstrades. Spread und Slippage sind nicht gemessen. Sharpe je Equity-Stand, nicht annualisiert.",
+        "gesamt": gesamt[-500:],
+        "realisiert_punkte": _realisiert_punkte(pfad),
+        "aktualitaet": _aktualitaet(pfad, buecher, kurs_fehlt),
+        "hinweis": (
+            "Equity ist die Summe der eröffneten Trader-Bücher. Rendite ist Gesamt-Equity gegen deren Startkapital, "
+            "kein Mittel der Einzelprozente. Drawdown kommt aus dieser gemeinsamen Kurve. "
+            "Spread und Slippage sind nicht gemessen. Sharpe je Equity-Stand, nicht annualisiert."
+        ),
+        "zeit_hinweis": "Der Zeitraum filtert nur die Diagramme. Kennzahlen gelten für den gesamten gespeicherten Zeitraum.",
     }
+
+
+def _letzte_buecher(pfad) -> list[dict]:
+    if not pfad.exists():
+        return []
+    namen = {haendler.name for haendler in HAENDLER}
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "paper_konto" not in tabellen:
+            return []
+        zeilen = verbindung.execute(
+            """
+            SELECT konto, cash, equity, zeit FROM paper_konto
+            WHERE broker = 'Lokal' AND id IN (
+                SELECT MAX(id) FROM paper_konto WHERE broker = 'Lokal' GROUP BY konto
+            )
+            """
+        ).fetchall()
+    buecher = []
+    for konto, cash, equity, zeit in zeilen:
+        if konto not in namen:
+            continue
+        buecher.append({"name": konto, "cash": _zahl(cash), "equity": _zahl(equity), "zeit": zeit})
+    return buecher
+
+
+def _gesamt_punkte(pfad) -> list[dict]:
+    """Letzten gemessenen Stand je Buch fortschreiben. Kein erfundener Kurs."""
+    if not pfad.exists():
+        return []
+    namen = {haendler.name for haendler in HAENDLER}
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "paper_konto" not in tabellen:
+            return []
+        zeilen = verbindung.execute(
+            "SELECT konto, equity, zeit FROM paper_konto WHERE broker = 'Lokal' ORDER BY id"
+        ).fetchall()
+    serien: dict[str, list[tuple[datetime, str, float]]] = {}
+    for konto, equity, zeit in zeilen:
+        if konto not in namen:
+            continue
+        zahl = _zahl(equity)
+        stempel = _zeit_lesen(zeit)
+        if zahl is None or stempel is None:
+            continue
+        serien.setdefault(str(konto), []).append((stempel, str(zeit), float(zahl)))
+    zeiten = sorted({eintrag[0] for serie in serien.values() for eintrag in serie})
+    zeiger = {name: 0 for name in serien}
+    letzter: dict[str, float] = {}
+    letzter_zeit: dict[str, datetime] = {}
+    letzter_text: dict[str, str] = {}
+    punkte = []
+    for zeit in zeiten:
+        for name, serie in serien.items():
+            index = zeiger[name]
+            while index < len(serie) and serie[index][0] <= zeit:
+                letzter[name] = serie[index][2]
+                letzter_zeit[name] = serie[index][0]
+                letzter_text[name] = serie[index][1]
+                index += 1
+            zeiger[name] = index
+        if not letzter:
+            continue
+        punkte.append(
+            {
+                "equity": round(sum(letzter.values()), 2),
+                "zeit": letzter_text[max(letzter_zeit, key=letzter_zeit.get)],
+                "buecher": len(letzter),
+                "fortgeschrieben": sum(1 for name in letzter if letzter_zeit[name] != zeit),
+            }
+        )
+    return punkte
+
+
+def _realisiert_punkte(pfad) -> list[dict]:
+    if not pfad.exists():
+        return []
+    namen = {haendler.name for haendler in HAENDLER}
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "ki_haendler_fall" not in tabellen:
+            return []
+        zeilen = verbindung.execute(
+            """
+            SELECT haendler, ergebnis, COALESCE(ausstieg_zeit, zeit) FROM ki_haendler_fall
+            WHERE ausstieg IS NOT NULL AND quelle = 'simulation' AND ergebnis IS NOT NULL
+            ORDER BY id
+            """
+        ).fetchall()
+    paare = []
+    for haendler, ergebnis, zeit in zeilen:
+        if haendler not in namen:
+            continue
+        netto = _zahl(ergebnis)
+        stempel = _zeit_lesen(zeit)
+        if netto is None or stempel is None:
+            continue
+        paare.append((stempel, str(zeit), netto))
+    paare.sort(key=lambda paar: paar[0])
+    lauf = Decimal(0)
+    return [{"equity": float(lauf := lauf + netto), "zeit": zeit} for _stempel, zeit, netto in paare][-500:]
+
+
+def _aktualitaet(pfad, buecher: list[dict], kurs_fehlt: bool) -> dict:
+    zeiten = [_zeit_lesen(buch.get("zeit")) for buch in buecher]
+    zeiten = [zeit for zeit in zeiten if zeit is not None]
+    jetzt = datetime.now(timezone.utc)  # noqa: UP017
+    if not zeiten:
+        stand = "Keine Daten"
+        stand_hinweis = "Kein gespeicherter Kontostand."
+    else:
+        letzte = max(zeiten)
+        stand = letzte.isoformat()
+        stand_hinweis = "Kontostand veraltet." if (jetzt - letzte).total_seconds() > 10 * 24 * 3600 else "Kontostand innerhalb von 10 Tagen."
+    kurs_zeit, kurs_hinweis = _letzter_kurs(pfad, jetzt)
+    if kurs_fehlt:
+        kurs_hinweis = "Mindestens ein offener Kurs fehlt und wird nicht als 0 gezählt. " + kurs_hinweis
+    return {"kontostand": stand, "kontostand_hinweis": stand_hinweis, "letzter_kurs": kurs_zeit, "kurs_hinweis": kurs_hinweis}
+
+
+def _letzter_kurs(pfad, jetzt: datetime) -> tuple[str, str]:
+    if not pfad.exists():
+        return "Keine Daten", "Keine Kursreihe."
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "kurse" not in tabellen:
+            return "Keine Daten", "Keine Kursreihe."
+        zeile = verbindung.execute("SELECT MAX(zeit) FROM kurse WHERE schluss > 0").fetchone()
+    if zeile is None or zeile[0] is None:
+        return "Keine Daten", "Kein gültiger Kurs gespeichert."
+    try:
+        stempel = datetime.fromtimestamp(float(zeile[0]), timezone.utc)  # noqa: UP017
+    except (OSError, OverflowError, ValueError):
+        return "Keine Daten", "Kurszeit ist ungültig."
+    hinweis = "Kurs veraltet." if (jetzt - stempel).total_seconds() > 10 * 24 * 3600 else "Letzter gültiger Kurs innerhalb von 10 Tagen."
+    return stempel.isoformat(), hinweis
+
+
+def _zeit_lesen(wert) -> datetime | None:
+    if not wert:
+        return None
+    try:
+        stempel = datetime.fromisoformat(str(wert))
+    except ValueError:
+        return None
+    if stempel.tzinfo is None:
+        stempel = stempel.replace(tzinfo=timezone.utc)  # noqa: UP017
+    return stempel.astimezone(timezone.utc)  # noqa: UP017
 
 
 def _meta(zeilen: list[dict]) -> str:
@@ -1005,15 +1209,6 @@ def _quoten_aus_equity(pfad, name: str) -> tuple[str, str]:
     sharpe = _KENNZAHL if streuung == 0 else f"{mittel / streuung:.2f} je Stand"
     sortino = _KENNZAHL if streuung_unten == 0 else f"{mittel / streuung_unten:.2f} je Stand"
     return sharpe, sortino
-
-
-def _faktor(gewinne: list[Decimal], verluste: list[Decimal], anzahl: int) -> str:
-    if anzahl < _MINDEST or not verluste:
-        return _KENNZAHL
-    summe = abs(sum(verluste, Decimal(0)))
-    if summe == 0:
-        return _KENNZAHL
-    return f"{(sum(gewinne, Decimal(0)) / summe):.2f}"
 
 
 def _rendite(pfad, name: str) -> str:
@@ -1055,24 +1250,18 @@ def _abgeschlossen(pfad, name: str) -> list[tuple[Decimal, float]]:
     for netto, einstieg, ausstieg in zeilen:
         start = _zahl(einstieg)
         ende = _zahl(ausstieg)
-        if start is None or start <= 0 or ende is None:
+        netto_zahl = _zahl(netto)
+        if start is None or start <= 0 or ende is None or netto_zahl is None:
             continue
-        ergebnis.append((_zahl(netto) or Decimal(0), float(ende / start - 1)))
+        ergebnis.append((netto_zahl, float(ende / start - 1)))
     return ergebnis
 
 
 def _drawdown(pfad, name: str) -> float | None:
-    if not pfad.exists():
-        return None
-    with sqlite3.connect(pfad) as verbindung:
-        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        if "paper_konto" not in tabellen:
-            return None
-        zeilen = verbindung.execute(
-            "SELECT equity FROM paper_konto WHERE broker = 'Lokal' AND konto = ? ORDER BY id",
-            (name,),
-        ).fetchall()
-    werte = [float(zeile[0]) for zeile in zeilen if _zahl(zeile[0]) is not None]
+    return _drawdown_aus(_equity_reihe(pfad, name))
+
+
+def _drawdown_aus(werte: list[float]) -> float | None:
     if len(werte) < 2:
         return None
     spitze = werte[0]
@@ -1149,12 +1338,7 @@ def _equity_punkte(pfad, name: str) -> list[dict]:
 
 
 def _kontostand(pfad, name: str) -> dict:
-    from papier import _positionen
-
-    offen = []
-    if pfad.exists():
-        for zeile in _positionen(pfad, name):
-            offen.append({"symbol": zeile["symbol"], "menge": zeile["menge"], "einstieg": zeile["einstieg"], "jetzt": zeile.get("jetzt")})
+    offen = _offen_lesen(pfad, name)
     if not pfad.exists():
         return {"equity": None, "cash": None, "offen": offen, "hat_buch": False}
     with sqlite3.connect(pfad) as verbindung:
@@ -1167,7 +1351,37 @@ def _kontostand(pfad, name: str) -> dict:
         ).fetchone()
     if zeile is None:
         return {"equity": None, "cash": None, "offen": offen, "hat_buch": False}
-    return {"equity": f"{_zahl(zeile[1]) or Decimal(0):.2f}", "cash": f"{_zahl(zeile[0]) or Decimal(0):.2f}", "offen": offen, "hat_buch": True}
+    equity = _zahl(zeile[1])
+    cash = _zahl(zeile[0])
+    return {
+        "equity": None if equity is None else f"{equity:.2f}",
+        "cash": None if cash is None else f"{cash:.2f}",
+        "offen": offen,
+        "hat_buch": True,
+    }
+
+
+def _offen_lesen(pfad, name: str) -> list[dict]:
+    if not pfad.exists():
+        return []
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "paper_buch" not in tabellen:
+            return []
+        zeilen = verbindung.execute(
+            "SELECT symbol, menge, einstieg, jetzt FROM paper_buch WHERE konto = ?",
+            (name,),
+        ).fetchall()
+    return [
+        {
+            "symbol": zeile[0],
+            "menge": zeile[1],
+            "einstieg": zeile[2],
+            "jetzt": zeile[3],
+            "kurs_fehlt": zeile[3] in (None, ""),
+        }
+        for zeile in zeilen
+    ]
 
 
 def _geschlossen(pfad, name: str) -> list[dict]:
@@ -1241,11 +1455,13 @@ def _letzte_pruefung(pfad, name: str) -> dict:
     if zeile is None:
         return {"besser": False, "grund": "Noch keine unabhängige Prüfung.", "status": "Nicht ausreichend Daten"}
     grund = str(zeile[1])
-    if "Weniger als" in grund or "nicht nach" in grund:
-        status = "Nicht ausreichend Daten"
-    elif zeile[0]:
+    if zeile[0]:
         status = "Geprüft"
-    elif "Benchmark nicht gemessen" in grund:
+    elif grund.startswith("Nicht ausreichend") or "Weniger als" in grund or "nicht nach" in grund:
+        status = "Nicht ausreichend Daten"
+    elif grund.startswith("Nicht freigegeben"):
+        status = "Nicht freigegeben"
+    elif grund.startswith("Benchmark nicht gemessen") or "Benchmark nicht gemessen" in grund:
         status = "Benchmark nicht gemessen"
     else:
         status = "Nicht ausreichend Daten"
@@ -1258,14 +1474,14 @@ def pruefe(pfad, name: str) -> dict:
     with sqlite3.connect(pfad) as verbindung:
         zeilen = verbindung.execute(
             """
-            SELECT id, merkmale, ergebnis, zeit FROM ki_haendler_fall
+            SELECT id, merkmale, ergebnis, zeit, ausstieg_zeit, einstieg, menge FROM ki_haendler_fall
             WHERE haendler = ? AND ausstieg IS NOT NULL AND quelle = 'simulation'
             ORDER BY id
             """,
             (name,),
         ).fetchall()
     faelle = []
-    for nummer, merkmale, ergebnis, zeit in zeilen:
+    for nummer, merkmale, ergebnis, zeit, ausstieg_zeit, einstieg, menge in zeilen:
         try:
             werte = tuple(float(wert) for wert in json.loads(merkmale))
         except (TypeError, json.JSONDecodeError):
@@ -1273,7 +1489,18 @@ def pruefe(pfad, name: str) -> dict:
         netto = _zahl(ergebnis)
         if not werte or netto is None:
             continue
-        faelle.append((int(nummer), werte, 1.0 if netto > 0 else 0.0, float(netto), str(zeit)))
+        faelle.append(
+            {
+                "id": int(nummer),
+                "werte": werte,
+                "ziel": 1.0 if netto > 0 else 0.0,
+                "netto": float(netto),
+                "zeit": str(zeit),
+                "ausstieg_zeit": ausstieg_zeit,
+                "einstieg": _zahl(einstieg),
+                "menge": _zahl(menge),
+            }
+        )
     if len(faelle) < 36:
         bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Weniger als 36 abgeschlossene Fälle für Training, Prüfung und Test.", "test_n": len(faelle)}
         _pruefung_speichern(pfad, name, bericht)
@@ -1282,63 +1509,160 @@ def pruefe(pfad, name: str) -> dict:
     training = faelle[:drittel]
     validierung = faelle[drittel:drittel * 2]
     test = faelle[drittel * 2:]
-    if not validierung or test[0][0] <= validierung[-1][0] or validierung[0][0] <= training[-1][0]:
+    if not validierung or test[0]["id"] <= validierung[-1]["id"] or validierung[0]["id"] <= training[-1]["id"]:
         bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Testfälle liegen nicht nach der Prüfung.", "test_n": len(test)}
         _pruefung_speichern(pfad, name, bericht)
         return bericht
     from ki import Modell, schritt, wahrscheinlichkeit
 
-    modell = Modell((0.0,) * len(training[0][1]), 0.0, 0)
-    for _nummer, werte, ziel, _netto, _zeit in training:
-        if len(werte) != len(modell.gewichte):
+    modell = Modell((0.0,) * len(training[0]["werte"]), 0.0, 0)
+    for fall in training:
+        if len(fall["werte"]) != len(modell.gewichte):
             continue
-        modell = schritt(modell, werte, ziel)
-    treffer = 0
-    genommen = []
-    for _nummer, werte, ziel, netto, _zeit in test:
-        if len(werte) != len(modell.gewichte):
-            continue
-        chance = wahrscheinlichkeit(modell, werte)
-        if (chance >= 0.5) == (ziel == 1.0):
-            treffer += 1
-        if chance >= 0.5:
-            genommen.append(netto)
-    val_treffer = 0
-    for _nummer, werte, ziel, _netto, _zeit in validierung:
-        if len(werte) != len(modell.gewichte):
-            continue
-        if (wahrscheinlichkeit(modell, werte) >= 0.5) == (ziel == 1.0):
-            val_treffer += 1
-    val_quote = val_treffer / len(validierung)
-    basis = sum(fall[3] for fall in test) / len(test)
-    modell_netto = sum(genommen) / len(genommen) if genommen else None
-    quote = treffer / len(test) if test else 0
-    verlauf = 0.0
-    spitze = 0.0
-    tief = 0.0
-    for netto in (fall[3] for fall in test):
-        verlauf += netto
-        spitze = max(spitze, verlauf)
-        tief = max(tief, spitze - verlauf)
-    risiko_ok = spitze > 0 and tief / spitze <= 0.08
-    schlaegt_regel = modell_netto is not None and modell_netto > basis and quote > 0.5 and risiko_ok and len(test) >= 12
+        modell = schritt(modell, fall["werte"], fall["ziel"])
+    val_genommen = _ausgewaehlt(modell, validierung, wahrscheinlichkeit)
+    val_modell = _mittel([fall["netto"] for fall in val_genommen])
+    val_regel = _mittel([fall["netto"] for fall in validierung])
+    wahl = "modell" if val_modell is not None and val_regel is not None and val_modell > val_regel else "regel"
+    genommen = _ausgewaehlt(modell, test, wahrscheinlichkeit)
+    modell_netto = _mittel([fall["netto"] for fall in genommen])
+    regel_netto = _mittel([fall["netto"] for fall in test])
+    pfad_werte = [fall["netto"] for fall in (genommen if wahl == "modell" else test)]
+    risiko = _drawdown_aus(_summenpfad(pfad_werte))
+    risiko_ok = risiko is not None and risiko <= 0.08
+    benchmark_summe, benchmark_text = _benchmark_summe(pfad, genommen if wahl == "modell" else test)
+    unsicherheit = _untere_grenze([fall["netto"] for fall in genommen]) if wahl == "modell" else _untere_grenze([fall["netto"] for fall in test])
     besser = False
+    if (
+        benchmark_summe is not None
+        and wahl == "modell"
+        and len(test) >= 12
+        and len(genommen) >= 12
+        and modell_netto is not None
+        and regel_netto is not None
+        and unsicherheit is not None
+        and unsicherheit > 0
+        and unsicherheit > regel_netto
+        and sum(fall["netto"] for fall in genommen) > benchmark_summe
+        and risiko_ok
+    ):
+        besser = True
+        status = "Geprüft"
+    elif benchmark_summe is None:
+        status = "Benchmark nicht gemessen"
+    else:
+        status = "Nicht freigegeben"
     grund = (
-        f"Prüfung {val_quote:.0%}, Test {quote:.0%} auf {len(test)} späteren Fällen. "
-        f"Regel-Mittel {basis:.2f}, Modell-Mittel {'—' if modell_netto is None else f'{modell_netto:.2f}'}. "
-        "Benchmark nicht gemessen. Keine übernommene Verbesserung."
+        f"{status}. Validierung wählt {wahl}. Validierung Modell {_zahl_text(val_modell)}, Regel {_zahl_text(val_regel)}. "
+        f"Test Modell {_zahl_text(modell_netto)} auf {len(genommen)} von {len(test)} späteren Fällen, Regel {_zahl_text(regel_netto)}. "
+        f"Untere Grenze {_zahl_text(unsicherheit)}. {benchmark_text} "
+        "Dieselbe Netto-Annahme, 0,125 Prozent je Seite. Aktives Modell unverändert."
     )
     bericht = {
-        "besser": besser and schlaegt_regel,
-        "status": "Benchmark nicht gemessen",
+        "besser": besser,
+        "status": status,
+        "wahl": wahl,
         "grund": grund,
         "test_n": len(test),
-        "train_bis": training[-1][0],
-        "pruef_ab": validierung[0][0],
-        "test_ab": test[0][0],
+        "train_bis": training[-1]["id"],
+        "pruef_ab": validierung[0]["id"],
+        "test_ab": test[0]["id"],
     }
     _pruefung_speichern(pfad, name, bericht)
     return bericht
+
+
+def _ausgewaehlt(modell, faelle: list[dict], wahrscheinlichkeit) -> list[dict]:
+    genommen = []
+    for fall in faelle:
+        if len(fall["werte"]) != len(modell.gewichte):
+            continue
+        if wahrscheinlichkeit(modell, fall["werte"]) >= 0.5:
+            genommen.append(fall)
+    return genommen
+
+
+def _mittel(werte: list[float]) -> float | None:
+    if not werte:
+        return None
+    return sum(werte) / len(werte)
+
+
+def _untere_grenze(werte: list[float]) -> float | None:
+    if len(werte) < 12:
+        return None
+    mittel = sum(werte) / len(werte)
+    streuung = math.sqrt(sum((wert - mittel) ** 2 for wert in werte) / (len(werte) - 1))
+    t = 2.20 if len(werte) < 30 else 2.04 if len(werte) < 120 else 1.96
+    return mittel - t * streuung / math.sqrt(len(werte))
+
+
+def _summenpfad(werte: list[float]) -> list[float]:
+    lauf = 0.0
+    pfad = []
+    for wert in werte:
+        lauf += wert
+        pfad.append(lauf)
+    return pfad
+
+
+def _zahl_text(wert: float | None) -> str:
+    return "—" if wert is None else f"{wert:.2f}"
+
+
+def _benchmark_summe(pfad, faelle: list[dict]) -> tuple[float | None, str]:
+    """Indexkauf über dieselbe Haltedauer und dieselben Gebühren. Lücken bleiben leer."""
+    reihen = _index_reihe(pfad)
+    if not reihen:
+        return None, "Benchmark nicht gemessen. Keine Indexreihe."
+    summe = 0.0
+    luecken = 0
+    for fall in faelle:
+        einstieg = fall.get("einstieg")
+        menge = fall.get("menge")
+        start = _index_zur_zeit(reihen, fall.get("zeit"))
+        ende = _index_zur_zeit(reihen, fall.get("ausstieg_zeit"))
+        if einstieg is None or menge is None or einstieg <= 0 or menge <= 0 or start is None or ende is None or start <= 0:
+            luecken += 1
+            continue
+        ausstieg = einstieg * (Decimal(str(ende)) / Decimal(str(start)))
+        _brutto, _ein, _aus, netto = _kosten(einstieg, ausstieg, menge)
+        summe += float(netto)
+    if luecken or not faelle:
+        return None, f"Benchmark nicht gemessen. Datenlücke bei {luecken} Fällen."
+    return summe, "Benchmark ist der Index über dieselbe Haltedauer."
+
+
+def _index_reihe(pfad) -> list[tuple[float, float]]:
+    if not pfad.exists():
+        return []
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "kurse" not in tabellen:
+            return []
+        for symbol in ("^GDAXI", "^GSPC"):
+            zeilen = verbindung.execute(
+                "SELECT zeit, schluss FROM kurse WHERE symbol = ? AND schluss > 0 ORDER BY zeit",
+                (symbol,),
+            ).fetchall()
+            reihe = [(float(zeit), float(schluss)) for zeit, schluss in zeilen if zeit is not None and schluss is not None]
+            if len(reihe) >= 2:
+                return reihe
+    return []
+
+
+def _index_zur_zeit(reihe: list[tuple[float, float]], zeit) -> float | None:
+    stempel = _zeit_lesen(zeit)
+    if stempel is None:
+        return None
+    ziel = stempel.timestamp()
+    gewaehlt = None
+    for punkt, preis in reihe:
+        if punkt <= ziel:
+            gewaehlt = preis
+        else:
+            break
+    return gewaehlt
 
 
 def _pruefung_speichern(pfad, name: str, bericht: dict) -> None:
@@ -1510,6 +1834,7 @@ def _tabellen(pfad) -> None:
             ("spread", "TEXT"),
             ("slippage", "TEXT"),
             ("ausstieg_zeit", "TEXT"),
+            ("menge", "TEXT"),
         ):
             _spalte(verbindung, "ki_haendler_fall", name, typ)
         verbindung.execute(

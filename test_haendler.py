@@ -246,7 +246,7 @@ class HaendlerTests(unittest.TestCase):
             self.assertEqual(len(_PROFIL), 30)
             self.assertEqual(bild["aktiv"], 15)
             self.assertEqual(bild["belastbar"], 0)
-            self.assertTrue(all(zeile["quelle"] == "simulation" and zeile["ergebnis"] == "0.00" for zeile in bild["rangliste"]))
+            self.assertTrue(all(zeile["quelle"] == "simulation" and zeile["ergebnis"] == "Keine Daten" for zeile in bild["rangliste"]))
             self.assertEqual(bild["meta_bericht"]["phasen"]["phase"], "nicht gemessen")
             self.assertIn("Nicht ausreichend", bild["rangliste"][0]["sharpe"])
             self.assertEqual(bild["zentrale"]["erfolg"], "Keine Daten")
@@ -258,3 +258,286 @@ class HaendlerTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"APCA_API_BASE_URL": "https://api.alpaca.markets"}), self.assertRaises(PapierFehler):
             basis_pruefen()
+
+    def test_gesamt_equity_ist_die_summe_und_nicht_der_erste_trader(self):
+        from papier import _tabellen as papier_tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            papier_tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-11-22T10:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-11-22T10:00:00+00:00', 'RSI')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '9000', '9000', '10000', '', '', '2026-11-22T11:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '11000', '11000', '10000', '', '', '2026-11-22T11:00:00+00:00', 'RSI')"
+                )
+            zentrale = uebersicht(pfad)["zentrale"]
+            self.assertEqual(zentrale["gesamt"][0]["equity"], 20000.0)
+            self.assertEqual(zentrale["gesamt"][0]["buecher"], 2)
+            self.assertEqual(zentrale["gesamt"][-1]["equity"], 20000.0)
+            self.assertEqual(zentrale["equity"], "20000.00")
+            self.assertEqual(zentrale["kapital"], "20000.00")
+            self.assertEqual(zentrale["rendite"], "0.0 %")
+            self.assertEqual(zentrale["drawdown"], "0.0%")
+            self.assertIn("innerhalb von 10 Tagen", zentrale["aktualitaet"]["kontostand_hinweis"])
+
+    def test_drawdown_behaelt_die_fruehe_senke_und_die_grenze_ist_strenger(self):
+        import math
+
+        from haendler import _untere_grenze
+        from papier import _tabellen as papier_tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            papier_tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', '2026-01-01T00:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '4000', '4000', '10000', '', '', '2026-01-01T00:01:00+00:00', 'Momentum')"
+                )
+                for nummer in range(500):
+                    verbindung.execute(
+                        "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '10000', '10000', '', '', ?, 'Momentum')",
+                        (f"2026-01-02T00:{nummer // 60:02d}:{nummer % 60:02d}+00:00",),
+                    )
+            zentrale = uebersicht(pfad)["zentrale"]
+            self.assertEqual(len(zentrale["gesamt"]), 500)
+            self.assertEqual(zentrale["drawdown"], "60.0%")
+        werte = [1.0] * 11 + [4.0]
+        mittel = sum(werte) / len(werte)
+        streuung = math.sqrt(sum((wert - mittel) ** 2 for wert in werte) / len(werte))
+        alt = mittel - 1.96 * streuung / math.sqrt(len(werte))
+        self.assertLess(_untere_grenze(werte), alt)
+        self.assertAlmostEqual(_untere_grenze([2.0] * 12), 2.0)
+
+    def test_fehlender_kurs_ist_keine_null_und_alter_stand_ist_veraltet(self):
+        from papier import _tabellen as papier_tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            papier_tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    "INSERT INTO paper_konto (broker, waehrung, equity, cash, sleeve, kurs, quelle, zeit, konto) VALUES ('Lokal', 'EUR', '10000', '9900', '10000', '', '', '2020-01-01T00:00:00+00:00', 'Momentum')"
+                )
+                verbindung.execute(
+                    "INSERT INTO paper_buch (konto, symbol, menge, einstieg, zeit, strategie) VALUES ('Momentum', 'AAPL', '1', '100', '2020-01-01T00:00:00+00:00', 'Momentum')"
+                )
+            zentrale = uebersicht(pfad)["zentrale"]
+            momentum = next(zeile for zeile in uebersicht(pfad)["rangliste"] if zeile["name"] == "Momentum")
+            self.assertIsNone(momentum["unrealisiert_zahl"])
+            self.assertEqual(zentrale["unrealisiert"], "Keine Daten")
+            self.assertIn("veraltet", zentrale["aktualitaet"]["kontostand_hinweis"])
+            self.assertEqual(zentrale["aktualitaet"]["letzter_kurs"], "Keine Daten")
+
+    def test_success_rate_zaehlt_nur_gueltige_abgeschlossene_nettoergebnisse(self):
+        from haendler import _tabellen, kennzahlen_aus
+
+        self.assertEqual(kennzahlen_aus([])["erfolg_text"], "Keine Daten")
+        self.assertIsNone(kennzahlen_aus([])["realisiert"])
+        self.assertEqual(kennzahlen_aus([Decimal("0.00")])["erfolg_text"], "0.0 % aus 1 Trades")
+        self.assertEqual(kennzahlen_aus([Decimal("0.00")])["ergebnis_text"], "0.00")
+        self.assertEqual(kennzahlen_aus([Decimal(2), Decimal(-1)])["erfolg"], 0.5)
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            _tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    """
+                    INSERT INTO ki_haendler_fall
+                    (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit)
+                    VALUES ('Momentum', 'AAPL', 'mittel', '[0.1]', '100', '110', NULL, 'Annahme', 'nicht gemessen', 'simulation', 0, '2026-01-01T00:00:00+00:00')
+                    """
+                )
+                verbindung.execute(
+                    """
+                    INSERT INTO ki_haendler_fall
+                    (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit)
+                    VALUES ('Momentum', 'MSFT', 'mittel', '[0.1]', '100', '90', '-1.00', 'Annahme', 'nicht gemessen', 'simulation', 0, '2026-01-02T00:00:00+00:00')
+                    """
+                )
+                verbindung.execute(
+                    """
+                    INSERT INTO ki_haendler_fall
+                    (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit)
+                    VALUES ('RSI', 'AAPL', 'kurz', '[0.1]', '100', '120', '2.00', 'Annahme', 'nicht gemessen', 'simulation', 0, '2026-01-03T00:00:00+00:00')
+                    """
+                )
+            bild = uebersicht(pfad)
+            momentum = next(zeile for zeile in bild["rangliste"] if zeile["name"] == "Momentum")
+            self.assertEqual(momentum["trades"], 1)
+            self.assertEqual(momentum["erfolg_text"] if "erfolg_text" in momentum else momentum["erfolg"], "0.0 % aus 1 Trades")
+            self.assertEqual(bild["zentrale"]["erfolg"], "50.0 % aus 2 abgeschlossenen Trades")
+            self.assertEqual(bild["zentrale"]["realisiert"], "1.00")
+            self.assertGreaterEqual(len(bild["zentrale"]["realisiert_punkte"]), 2)
+
+    def test_pruefung_waehlt_auf_der_validierung_und_gibt_nur_mit_benchmark_frei(self):
+        from haendler import _tabellen
+        from papier import strategie_uebernehmen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            _tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                nummer = 0
+                for _paar in range(12):
+                    for werte, netto in ((" [1, 0]", "10.00"), ("[0, 1]", "-1.00")):
+                        nummer += 1
+                        verbindung.execute(
+                            """
+                            INSERT INTO ki_haendler_fall
+                            (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit)
+                            VALUES ('Momentum', 'AAPL', 'mittel', ?, '100', '101', ?, 'Annahme', 'nicht gemessen', 'simulation', 0, ?)
+                            """,
+                            (werte.strip(), netto, f"2026-01-{(nummer % 28) + 1:02d}T00:00:00+00:00"),
+                        )
+                for _paar in range(12):
+                    for werte, netto in (("[1, 0]", "-5.00"), ("[0, 1]", "10.00")):
+                        nummer += 1
+                        verbindung.execute(
+                            """
+                            INSERT INTO ki_haendler_fall
+                            (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit)
+                            VALUES ('Momentum', 'AAPL', 'mittel', ?, '100', '101', ?, 'Annahme', 'nicht gemessen', 'simulation', 0, ?)
+                            """,
+                            (werte, netto, f"2026-02-{(nummer % 28) + 1:02d}T00:00:00+00:00"),
+                        )
+                for _paar in range(12):
+                    for werte, netto in (("[1, 0]", "100.00"), ("[0, 1]", "-1.00")):
+                        nummer += 1
+                        verbindung.execute(
+                            """
+                            INSERT INTO ki_haendler_fall
+                            (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit)
+                            VALUES ('Momentum', 'AAPL', 'mittel', ?, '100', '101', ?, 'Annahme', 'nicht gemessen', 'simulation', 0, ?)
+                            """,
+                            (werte, netto, f"2026-03-{(nummer % 28) + 1:02d}T00:00:00+00:00"),
+                        )
+            bericht = pruefe(pfad, "Momentum")
+            self.assertEqual(bericht["wahl"], "regel")
+            self.assertFalse(bericht["besser"])
+            self.assertEqual(bericht["status"], "Benchmark nicht gemessen")
+            with sqlite3.connect(pfad) as verbindung:
+                self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_haendler_modell").fetchone()[0], 0)
+            self.assertFalse(strategie_uebernehmen(99)[0])
+
+    def test_gemessener_index_kann_das_modell_freigeben_ohne_es_zu_uebernehmen(self):
+        from haendler import _tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            _tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute("CREATE TABLE IF NOT EXISTS kurse (symbol TEXT, zeit INTEGER, schluss REAL)")
+                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 100)", (int(datetime(2026, 1, 1, tzinfo=BERLIN).timestamp()),))
+                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 90)", (int(datetime(2026, 6, 1, tzinfo=BERLIN).timestamp()),))
+                for _block, monat in ((0, 1), (1, 3), (2, 5)):
+                    for paar in range(12):
+                        for _gewinner, werte, netto in ((True, "[1, 0]", "10.00"), (False, "[0, 1]", "-1.00")):
+                            tag = paar + 1
+                            verbindung.execute(
+                                """
+                                INSERT INTO ki_haendler_fall
+                                (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, menge, kosten, benchmark, quelle, gelernt, zeit, ausstieg_zeit)
+                                VALUES ('Momentum', 'AAPL', 'mittel', ?, '100', '110', ?, '1', 'Annahme', 'nicht gemessen', 'simulation', 0, ?, ?)
+                                """,
+                                (
+                                    werte,
+                                    netto,
+                                    f"2026-0{monat}-{tag:02d}T00:00:00+00:00",
+                                    f"2026-0{monat}-{tag:02d}T12:00:00+00:00",
+                                ),
+                            )
+            bericht = pruefe(pfad, "Momentum")
+            self.assertEqual(bericht["wahl"], "modell")
+            self.assertTrue(bericht["besser"])
+            self.assertEqual(bericht["status"], "Geprüft")
+            self.assertGreater(float(bericht["grund"].split("Untere Grenze ")[1].split(".")[0]), 0)
+            self.assertLess(bericht["train_bis"], bericht["pruef_ab"])
+            self.assertLess(bericht["pruef_ab"], bericht["test_ab"])
+            with sqlite3.connect(pfad) as verbindung:
+                self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_haendler_modell").fetchone()[0], 0)
+
+    def test_negativer_vorsprung_wird_nicht_freigegeben(self):
+        from haendler import _haltung, _tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            _tabellen(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute("CREATE TABLE IF NOT EXISTS kurse (symbol TEXT, zeit INTEGER, schluss REAL)")
+                for tag in range(1, 13):
+                    eintritt = datetime(2026, 5, tag, tzinfo=BERLIN)
+                    verbindung.execute(
+                        "INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 100)",
+                        (int(eintritt.timestamp()),),
+                    )
+                    verbindung.execute(
+                        "INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 10)",
+                        (int(eintritt.timestamp()) + 6 * 3600,),
+                    )
+                for monat, netto_gut, netto_schlecht in ((1, "10.00", "-1.00"), (3, "-0.30", "-1.00"), (5, "-0.30", "-1.00")):
+                    for tag in range(1, 13):
+                        for werte, netto in (("[1, 0]", netto_gut), ("[0, 1]", netto_schlecht)):
+                            verbindung.execute(
+                                """
+                                INSERT INTO ki_haendler_fall
+                                (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, menge, kosten, benchmark, quelle, gelernt, zeit, ausstieg_zeit)
+                                VALUES ('Momentum', 'AAPL', 'mittel', ?, '100', '99', ?, '1', 'Annahme', 'nicht gemessen', 'simulation', 0, ?, ?)
+                                """,
+                                (werte, netto, f"2026-0{monat}-{tag:02d}T00:00:00+00:00", f"2026-0{monat}-{tag:02d}T12:00:00+00:00"),
+                            )
+                verbindung.execute(
+                    """
+                    INSERT INTO ki_haendler_fall
+                    (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit, ausstieg_zeit)
+                    VALUES ('RSI', 'AAPL', 'kurz', '[0.1]', '100', '101', '1.00', 'Annahme', 'nicht gemessen', 'simulation', 0, '2026-05-01T00:00:00', '2026-05-01T12:00:00+00:00')
+                    """
+                )
+            bericht = pruefe(pfad, "Momentum")
+            self.assertEqual(bericht["wahl"], "modell")
+            self.assertFalse(bericht["besser"])
+            self.assertEqual(bericht["status"], "Nicht freigegeben")
+            self.assertEqual(_haltung(pfad, "RSI"), "12.0 Stunden aus 1 Trades")
+
+    def test_suche_und_sortierung_im_dashboard(self):
+        import subprocess
+
+        quelle = Path("fenster_app/seite.html").read_text()
+        funktion = quelle[quelle.index("function kiListe"):quelle.index("function detailBlick")]
+        script = (
+            "const quelle = " + repr(quelle) + ";\n"
+            "let kiSuche = '';\nlet kiFilter = 'alle';\nlet kiSort = 'name';\nlet kiRichtung = 'auf';\n"
+            + funktion
+            + """
+            kiSuche = "rsi";
+            kiSort = "rendite_zahl";
+            kiRichtung = "ab";
+            const stand = {rangliste: [
+              {name:"RSI", einsatz:true, horizont:"kurz", gruppe:"Technik", belastbar:false, rendite_zahl: 1.5},
+              {name:"Momentum", einsatz:true, horizont:"mittel", gruppe:"Technik", belastbar:false, rendite_zahl: 20},
+              {name:"RSI Trend", einsatz:false, horizont:"lang", gruppe:"Technik", belastbar:false, rendite_zahl: null}
+            ]};
+            const gesucht = kiListe(stand, true).map(function (zeile) { return zeile.name; });
+            if (gesucht.join(",") !== "RSI,RSI Trend") throw new Error("suche " + gesucht.join(","));
+            kiSuche = "";
+            const sortiert = kiListe(stand, true).map(function (zeile) { return zeile.name; });
+            if (sortiert.join(",") !== "Momentum,RSI,RSI Trend") throw new Error("sort " + sortiert.join(","));
+            kiFilter = "pausiert";
+            const pausiert = kiListe(stand, false).map(function (zeile) { return zeile.name; });
+            if (pausiert.join(",") !== "RSI Trend") throw new Error("filter " + pausiert.join(","));
+            if (quelle.indexOf("Der Zeitraum filtert nur die Diagramme") < 0) throw new Error("zeit");
+            if (quelle.indexOf("kiSuche = suche.value") < 0) throw new Error("eingabe");
+            """
+        )
+        ergebnis = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(ergebnis.returncode, 0, ergebnis.stderr)

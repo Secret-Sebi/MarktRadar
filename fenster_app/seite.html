@@ -93,9 +93,10 @@
   table.ki th, table.ki td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(61, 255, 154, .16); white-space: nowrap; }
   table.ki tr.wahl { background: rgba(61, 255, 154, .08); }
   .ki-detail { font-size: 14px; line-height: 1.45; }
-  .plattform-nav, .zeit-nav { display: flex; flex-wrap: wrap; gap: 6px; }
-  .plattform-nav button.aktiv, .zeit-nav button.aktiv { background: rgba(61, 255, 154, .22); color: #e9fff4; }
-  .kpi-reihe { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+  .plattform-nav, .zeit-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .plattform-nav button, .zeit-nav button, .ki-filter button { font: inherit; color: #d7f5e4; background: transparent; border: 1px solid rgba(61, 255, 154, .28); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+  .plattform-nav button.aktiv, .zeit-nav button.aktiv, .ki-filter button.aktiv, table.ki th.aktiv { background: rgba(61, 255, 154, .22); color: #e9fff4; }
+  .kpi-reihe { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 14px; }
   .kpi { padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(61, 255, 154, .22); background: rgba(6, 22, 16, .9); }
   .kpi span, .kpi em { display: block; color: #8fb9a4; font-size: 11px; font-style: normal; }
   .kpi strong { display: block; margin: 6px 0 4px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
@@ -103,8 +104,12 @@
   .kpi.minus strong { color: #ff8b98; }
   .kpi.warn strong { color: #ffc14d; }
   .diagramm { border: 1px solid rgba(61, 255, 154, .18); border-radius: 14px; padding: 12px; background: rgba(6, 22, 16, .72); }
-  .diagramm p { margin: 8px 0 0; color: #ffc14d; }
-  .diagramm svg { width: 100%; height: 140px; display: block; }
+  .diagramm p { margin: 8px 0 0; color: #cfe7da; font-size: 13px; }
+  .diagramm p.plus { color: #3dff9a; }
+  .diagramm p.minus { color: #ff8b98; }
+  .diagramm p.tooltip { color: #e9fff4; min-height: 1.3em; }
+  .diagramm svg { width: 100%; height: 180px; display: block; }
+  table.ki th { cursor: pointer; }
   table.ki td.plus { color: #3dff9a; }
   table.ki td.minus { color: #ff8b98; }
   table.ki td.pause { color: #ffc14d; }
@@ -576,8 +581,12 @@ let kiWahl = "";
 let blick = "dashboard";
 let kiZeit = "alles";
 let kiSuche = "";
+let kiRichtung = "auf";
 
 function papierZeichnen(papier) {
+  const alt = document.getElementById("ki-suche");
+  const fokus = !!(alt && document.activeElement === alt);
+  const caret = fokus ? alt.selectionStart : null;
   window._papier = papier;
   papier = papier || {};
   const schalter = document.getElementById("papier-an");
@@ -586,6 +595,13 @@ function papierZeichnen(papier) {
   const brett = document.getElementById("papier-brett");
   brett.replaceChildren();
   plattformZeichnen(brett, papier);
+  if (fokus) {
+    const neu = document.getElementById("ki-suche");
+    if (neu) {
+      neu.focus();
+      if (caret != null) neu.setSelectionRange(caret, caret);
+    }
+  }
 }
 
 function plattformZeichnen(brett, papier) {
@@ -652,11 +668,11 @@ function dashboardBlick(block, stand, papier) {
     ["Cash", zentrale.cash, "Letzter gespeicherter Cash-Stand."],
     ["Realisiert", zentrale.realisiert, zentrale.erfolg || "Keine Daten"],
     ["Unrealisiert", zentrale.unrealisiert, "Nur Positionen mit Einstieg und aktuellem Kurs."],
-    ["Rendite", zentrale.rendite, "Mittel der Bücher mit Equity-Reihe, gegen 10.000 Euro."],
-    ["Success Rate", zentrale.erfolg, "Profitable abgeschlossene Trades geteilt durch alle abgeschlossenen."],
-    ["Abgeschlossen", String(zentrale.trades == null ? "Keine Daten" : zentrale.trades), "Nur gültige Simulationstrades."],
+    ["Rendite", zentrale.rendite, "Gesamt-Equity gegen das Startkapital der eröffneten Bücher."],
+    ["Success Rate", zentrale.erfolg, "Profitable abgeschlossene Trades geteilt durch alle gültigen abgeschlossenen."],
+    ["Abgeschlossen", String(zentrale.trades == null ? "Keine Daten" : zentrale.trades), "Nur gültige Simulationstrades. 0 ist ein echter Leerstand."],
     ["Offene Positionen", String(zentrale.offen == null ? "Keine Daten" : zentrale.offen), "Getrennte virtuelle Bücher."],
-    ["Maximaler Drawdown", zentrale.drawdown, "Größter Drawdown eines einzelnen Buchs."],
+    ["Maximaler Drawdown", zentrale.drawdown, "Aus der gemeinsamen Equity-Kurve."],
     ["Profit Factor", zentrale.faktor, "Summe der Gewinne geteilt durch Summe der Verluste. Ab 20 Trades."],
     ["Aktive Trader", String(stand.aktiv == null ? "Keine Daten" : stand.aktiv), "Regeln mit nutzbaren Kursdaten."],
     ["Pausierte Trader", String(stand.pause == null ? "Keine Daten" : stand.pause), "Daten fehlen oder ergeben keinen Kauf."],
@@ -665,10 +681,13 @@ function dashboardBlick(block, stand, papier) {
     reihe.append(kpiKarte(eintrag[0], eintrag[1], eintrag[2], kpiKlasse(eintrag[1])));
   });
   block.append(reihe);
-  block.append(diagramm("Equity der Trader", (zentrale.kurven || [])[0] && (zentrale.kurven || [])[0].punkte, zentrale.hinweis));
+  zeitWahl(block);
+  const aktualitaet = zentrale.aktualitaet || {};
+  block.append(diagramm("Gesamt-Equity aller Trader", zentrale.gesamt, zentrale.hinweis));
+  block.append(diagramm("Realisierter Gewinn und Verlust", zentrale.realisiert_punkte, "Summe der Nettoergebnisse in der Zeit. Fehlende Ausstiege fehlen in der Kurve."));
   const hinweis = document.createElement("p");
   hinweis.className = "regel";
-  text(hinweis, (papier.alpaca && papier.alpaca.verbunden) ? "Alpaca Paper ist verbunden. Die Kennzahlen hier sind die lokale Simulation." : "Alpaca ist nicht verbunden. Die Kennzahlen sind die lokale Simulation.");
+  text(hinweis, (aktualitaet.kontostand_hinweis || "Keine Daten") + " " + (aktualitaet.kurs_hinweis || "") + " " + ((papier.alpaca && papier.alpaca.verbunden) ? "Alpaca Paper ist verbunden. Die Kennzahlen hier sind die lokale Simulation." : "Alpaca ist nicht verbunden. Die Kennzahlen sind die lokale Simulation."));
   block.append(hinweis);
 }
 
@@ -678,7 +697,7 @@ function diagramm(titel, punkte, hinweis) {
   const name = document.createElement("h2");
   text(name, titel);
   kasten.append(name);
-  const gefiltert = (punkte || []).filter(function (punkt) { return punktImZeitraum(punkt.zeit); });
+  const gefiltert = (punkte || []).filter(function (punkt) { return punktImZeitraum(punkt.zeit) && Number.isFinite(Number(punkt.equity)); });
   if (gefiltert.length < 2) {
     const leer = document.createElement("p");
     text(leer, "Keine Daten. " + (hinweis || "Es liegen weniger als zwei gespeicherte Stände in diesem Zeitraum."));
@@ -690,19 +709,55 @@ function diagramm(titel, punkte, hinweis) {
   const oben = Math.max.apply(null, werte);
   const spanne = oben - unten || 1;
   const svg = document.createElementNS(SVG, "svg");
-  svg.setAttribute("viewBox", "0 0 300 140");
+  svg.setAttribute("viewBox", "0 0 640 180");
   const linie = document.createElementNS(SVG, "polyline");
+  const steigend = werte[werte.length - 1] >= werte[0];
   linie.setAttribute("fill", "none");
-  linie.setAttribute("stroke", werte[werte.length - 1] >= werte[0] ? "#3dff9a" : "#ff8b98");
+  linie.setAttribute("stroke", steigend ? "#3dff9a" : "#ff8b98");
   linie.setAttribute("stroke-width", "2");
-  linie.setAttribute("points", werte.map(function (wert, index) {
-    const x = werte.length === 1 ? 0 : (index / (werte.length - 1)) * 300;
-    const y = 130 - ((wert - unten) / spanne) * 120;
-    return x.toFixed(1) + "," + y.toFixed(1);
-  }).join(" "));
+  const xy = werte.map(function (wert, index) {
+    const x = werte.length === 1 ? 8 : 8 + (index / (werte.length - 1)) * 624;
+    const y = 164 - ((wert - unten) / spanne) * 148;
+    return { x: x, y: y };
+  });
+  linie.setAttribute("points", xy.map(function (punkt) { return punkt.x.toFixed(1) + "," + punkt.y.toFixed(1); }).join(" "));
   svg.append(linie);
-  kasten.append(svg);
+  const tipp = document.createElement("p");
+  tipp.className = "tooltip";
+  text(tipp, "Zeige auf die Kurve für Datum, Equity und Veränderung.");
+  gefiltert.forEach(function (punkt, index) {
+    const kreis = document.createElementNS(SVG, "circle");
+    kreis.setAttribute("cx", xy[index].x.toFixed(1));
+    kreis.setAttribute("cy", xy[index].y.toFixed(1));
+    kreis.setAttribute("r", "6");
+    kreis.setAttribute("fill", "transparent");
+    kreis.addEventListener("mouseenter", function () {
+      const anfang = werte[index] - werte[0];
+      const vergleich = index === 0 ? "Startpunkt" : "zum vorherigen Stand " + vorzeichen(werte[index] - werte[index - 1]);
+      text(tipp, zeitText(punkt.zeit) + " · Equity " + werte[index].toFixed(2) + " Euro · " + vergleich + " · seit Beginn " + vorzeichen(anfang) + (punkt.fortgeschrieben ? " · " + punkt.fortgeschrieben + " Bücher mit älterem Stand" : "") + (punkt.buecher ? " · " + punkt.buecher + " Bücher" : ""));
+    });
+    svg.append(kreis);
+  });
+  const achse = document.createElement("p");
+  achse.className = "achse";
+  text(achse, "Euro · " + zeitText(gefiltert[0].zeit) + " bis " + zeitText(gefiltert[gefiltert.length - 1].zeit) + " · " + unten.toFixed(2) + " bis " + oben.toFixed(2));
+  const aenderung = werte[werte.length - 1] - werte[0];
+  const satz = document.createElement("p");
+  satz.className = aenderung >= 0 ? "plus" : "minus";
+  text(satz, (aenderung >= 0 ? "Gewinn " : "Verlust ") + Math.abs(aenderung).toFixed(2) + " Euro gegenüber dem ersten Stand dieser Kurve");
+  kasten.append(svg, achse, satz, tipp);
   return kasten;
+}
+
+function vorzeichen(wert) {
+  return (wert > 0 ? "+" : "") + wert.toFixed(2) + " Euro";
+}
+
+function zeitText(wert) {
+  if (!wert) return "ohne Zeit";
+  const datum = new Date(wert);
+  if (Number.isNaN(datum.getTime())) return String(wert);
+  return datum.toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "short" });
 }
 
 function punktImZeitraum(zeit) {
@@ -725,6 +780,10 @@ function zeitWahl(block) {
     nav.append(knopf);
   });
   block.append(nav);
+  const note = document.createElement("p");
+  note.className = "regel";
+  text(note, "Der Zeitraum filtert nur die Diagramme. Kennzahlen gelten für den gesamten gespeicherten Zeitraum.");
+  block.append(note);
 }
 
 function tabelleBlick(block, stand, alle) {
@@ -733,7 +792,10 @@ function tabelleBlick(block, stand, alle) {
   suche.value = kiSuche;
   suche.placeholder = "Trader suchen";
   suche.setAttribute("aria-label", "Trader suchen");
-  suche.addEventListener("input", function () { kiSuche = suche.value; });
+  suche.addEventListener("input", function () {
+    kiSuche = suche.value;
+    if (window._papier) papierZeichnen(window._papier);
+  });
   block.append(suche);
   filterKnopf(block);
   const scroller = document.createElement("div");
@@ -750,8 +812,17 @@ function tabelleBlick(block, stand, alle) {
     ["dd_zahl", "Drawdown"], ["validierung", "Validierung"]
   ].forEach(function (paar) {
     const zelle = document.createElement("th");
-    text(zelle, paar[1]);
-    zelle.addEventListener("click", function () { kiSort = paar[0]; if (window._papier) papierZeichnen(window._papier); });
+    const marke = kiSort === paar[0] ? (kiRichtung === "auf" ? " ↑" : " ↓") : "";
+    if (kiSort === paar[0]) zelle.className = "aktiv";
+    text(zelle, paar[1] + marke);
+    zelle.addEventListener("click", function () {
+      if (kiSort === paar[0]) kiRichtung = kiRichtung === "ab" ? "auf" : "ab";
+      else {
+        kiSort = paar[0];
+        kiRichtung = paar[0] === "name" || paar[0] === "status" || paar[0] === "validierung" ? "auf" : "ab";
+      }
+      if (window._papier) papierZeichnen(window._papier);
+    });
     kopf.append(zelle);
   });
   tabelle.append(kopf);
@@ -785,9 +856,9 @@ function spalten(zeile) {
     { text: zeile.realisiert_zahl == null ? "Keine Daten" : zeile.realisiert_zahl.toFixed(2) },
     { text: zeile.unrealisiert_zahl == null ? "Keine Daten" : zeile.unrealisiert_zahl.toFixed(2) },
     { text: zeile.erfolg || "Keine Daten" },
-    { text: String(zeile.treffer_zahl || 0) },
-    { text: String(zeile.verlust_zahl || 0) },
-    { text: String(zeile.trades || 0) },
+    { text: zeile.treffer_zahl == null ? "Keine Daten" : String(zeile.treffer_zahl) },
+    { text: zeile.verlust_zahl == null ? "Keine Daten" : String(zeile.verlust_zahl) },
+    { text: String(zeile.trades) },
     { text: zeile.drawdown || "Keine Daten" },
     { text: zeile.validierung || "Nicht ausreichend Daten", klasse: "pause" }
   ];
@@ -834,10 +905,12 @@ function kiListe(stand, alle) {
   liste.sort(function (a, b) {
     const links = a[kiSort];
     const rechts = b[kiSort];
-    if (typeof links === "number" && typeof rechts === "number") return rechts - links;
-    if (typeof links === "number") return -1;
-    if (typeof rechts === "number") return 1;
-    return String(links || "").localeCompare(String(rechts || ""), "de");
+    const linksZahl = typeof links === "number";
+    const rechtsZahl = typeof rechts === "number";
+    if (linksZahl && rechtsZahl) return (kiRichtung === "auf" ? 1 : -1) * (links - rechts);
+    if (linksZahl) return -1;
+    if (rechtsZahl) return 1;
+    return (kiRichtung === "ab" ? -1 : 1) * String(links || "").localeCompare(String(rechts || ""), "de");
   });
   return liste;
 }
@@ -861,8 +934,16 @@ function detailBlick(stand) {
   karten.append(kpiKarte("Version", String(zeile.version), zeile.lernstatus));
   karten.append(kpiKarte("Start", detail.start || "10000.00", "Virtuelles Startkapital in Euro."));
   karten.append(kpiKarte("Equity", detail.hat_buch ? detail.equity : "Keine Daten", "Letzter Buchstand."));
-  karten.append(kpiKarte("Success Rate", zeile.erfolg, "Nur abgeschlossene Trades nach Gebühren."));
-  karten.append(kpiKarte("Profit Factor", zeile.faktor, "Ab 20 Trades."));
+  karten.append(kpiKarte("Rendite", zeile.rendite, "Letzte Equity gegen 10.000 Euro Start."));
+  karten.append(kpiKarte("Realisiert", zeile.realisiert_zahl == null ? "Keine Daten" : zeile.realisiert_zahl.toFixed(2), "Netto abgeschlossener Trades nach Gebühren."));
+  karten.append(kpiKarte("Unrealisiert", zeile.unrealisiert_zahl == null ? "Keine Daten" : zeile.unrealisiert_zahl.toFixed(2), "Nur Positionen mit gemessenem Kurs. Ein fehlender Kurs ist keine 0."));
+  karten.append(kpiKarte("Success Rate", zeile.erfolg, "Gewinnbringende abgeschlossene Trades geteilt durch alle gültigen."));
+  karten.append(kpiKarte("Gewinne", zeile.treffer_zahl == null ? "Keine Daten" : String(zeile.treffer_zahl), "Abgeschlossene Trades mit positivem Netto."));
+  karten.append(kpiKarte("Verluste", zeile.verlust_zahl == null ? "Keine Daten" : String(zeile.verlust_zahl), "Abgeschlossene Trades mit negativem Netto."));
+  karten.append(kpiKarte("Trades", String(zeile.trades), "Gültige abgeschlossene Simulationstrades."));
+  karten.append(kpiKarte("Ø Gewinn", zeile.gewinn, "Mittel der positiven Nettoergebnisse."));
+  karten.append(kpiKarte("Ø Verlust", zeile.verlust, "Mittel der negativen Nettoergebnisse."));
+  karten.append(kpiKarte("Profit Factor", zeile.faktor, "Summe der Gewinne geteilt durch Summe der Verluste. Ab 20 Trades."));
   karten.append(kpiKarte("Drawdown", zeile.drawdown, "Aus der Equity-Reihe."));
   karten.append(kpiKarte("Haltedauer", zeile.haltung, "Nur wenn Ein- und Ausstiegszeit gespeichert sind."));
   karten.append(kpiKarte("Serie", zeile.serie, "Längste Folge abgeschlossener Gewinne und Verluste."));
@@ -913,9 +994,11 @@ function metaBlick(block, stand) {
 function performanceBlick(block, stand) {
   zeitWahl(block);
   const zentrale = stand.zentrale || {};
+  block.append(diagramm("Gesamt-Equity", zentrale.gesamt, "Summe der Trader-Bücher. Ein Buch ohne Stand zählt nicht mit."));
+  block.append(diagramm("Realisierter Gewinn und Verlust", zentrale.realisiert_punkte, "Nur abgeschlossene Nettoergebnisse."));
   const kurven = zentrale.kurven || [];
   if (!kurven.length) {
-    block.append(diagramm("Performance", [], "Noch keine Equity-Reihe. Phasen, Horizonte und Profit Factor bleiben ohne Stände leer."));
+    block.append(diagramm("Einzelne Trader", [], "Noch keine Equity-Reihe eines einzelnen Traders."));
     return;
   }
   kurven.forEach(function (kurve) { block.append(diagramm(kurve.name, kurve.punkte)); });
@@ -950,6 +1033,9 @@ function statusBlick(block, stand, papier) {
   karten.append(kpiKarte("Ohne Daten", String(stand.ohne_daten == null ? "Keine Daten" : stand.ohne_daten), "Diese Regeln kaufen nicht."));
   karten.append(kpiKarte("Letztes Lernen", stand.lernen || "Keine Daten", "Zeit der letzten Modellversion."));
   karten.append(kpiKarte("Paper", papier.automatisch ? "an" : "aus", "Live-Orders bleiben gesperrt."));
+  const aktualitaet = (stand.zentrale || {}).aktualitaet || {};
+  karten.append(kpiKarte("Kontostand", aktualitaet.kontostand || "Keine Daten", aktualitaet.kontostand_hinweis || ""));
+  karten.append(kpiKarte("Letzter Kurs", aktualitaet.letzter_kurs || "Keine Daten", aktualitaet.kurs_hinweis || ""));
   block.append(karten);
   (stand.rangliste || []).filter(function (zeile) { return zeile.fehlt; }).forEach(function (zeile) {
     const satz = document.createElement("p");
