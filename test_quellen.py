@@ -150,14 +150,12 @@ class EuroTests(unittest.TestCase):
             hinweis="Yahoo.",
         )
         euro = nach_euro(daten, lambda code: 0.9 if code == "USD" else None)
-        self.assertEqual(euro.waehrung, "EUR")
-        self.assertAlmostEqual(euro.preis, 90.0)
-        self.assertAlmostEqual(euro.schluesse[-1], 90.0)
-        self.assertAlmostEqual(euro.hoch_52w, 99.0)
-        self.assertAlmostEqual(euro.balken[0].schluss, 90.0)
-        self.assertEqual(euro.balken[0].volumen, 5.0)
-        self.assertAlmostEqual(euro.tag_pct, 1.5)
-        self.assertIn("keine historischen Eurokurse", euro.hinweis)
+        self.assertEqual(euro.waehrung, "USD")
+        self.assertAlmostEqual(euro.preis, 100.0)
+        self.assertAlmostEqual(euro.schluesse[-1], 100.0)
+        self.assertAlmostEqual(euro.hoch_52w, 110.0)
+        self.assertAlmostEqual(euro.balken[0].schluss, 100.0)
+        self.assertIn("Ursprungswährung bleibt", euro.hinweis)
         self.assertAlmostEqual(euro.schluesse[-1] / euro.schluesse[0], 100.0 / 80.0)
 
     def test_historischer_wechselkurs_aendert_die_eurorendite(self):
@@ -288,8 +286,9 @@ class EuroTests(unittest.TestCase):
     def test_pence_werden_vor_dem_wechselkurs_geteilt(self):
         daten = Kursdaten("HSBA.L", "HSBC", "GBp", 10000.0, None, False, (10000.0,), 10000.0)
         euro = nach_euro(daten, lambda code: 1.2 if code == "GBP" else None)
-        self.assertEqual(euro.waehrung, "EUR")
-        self.assertAlmostEqual(euro.preis, 120.0)
+        self.assertEqual(euro.waehrung, "GBP")
+        self.assertAlmostEqual(euro.preis, 100.0)
+        self.assertIn("kein Eurokurs", euro.hinweis)
 
 
 class FallbackTests(unittest.TestCase):

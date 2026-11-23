@@ -24,21 +24,19 @@ def nach_euro(daten: Kursdaten, wechselkurs) -> Kursdaten:
     if not daten.waehrung or (code == "EUR" and teiler == 1):
         return daten
     if code == "EUR":
-        return _skaliere(daten, 1 / teiler, "Pence wurden in Euro umgerechnet.")
+        return _skaliere(daten, 1 / teiler, "Pence wurden in Euro umgerechnet.", "EUR")
     geliefert = wechselkurs(code)
     if isinstance(geliefert, (tuple, list)):
         historisch = _mit_reihe(daten, geliefert, teiler)
         if historisch is not None:
             return historisch
         return daten
-    if not isinstance(geliefert, (int, float)) or isinstance(geliefert, bool) or geliefert <= 0:
-        return daten
-    hinweis = (
-        f"Nur der heutige Wechselkurs {code} nach Euro. "
-        "Die Prozente bleiben die der Originalwährung. Die alten Stände sind keine historischen Eurokurse. "
-        "Das ist nicht der Trade-Republic-Preis."
+    if daten.waehrung in _PENCE:
+        return _skaliere(daten, 1 / teiler, "Pence wurden in Pfund umgerechnet. Das ist kein Eurokurs.", "GBP")
+    return _ohne_euro(
+        daten,
+        "Ein einzelner Wechselkurs wird nicht auf die historische Reihe angewendet. Die Ursprungswährung bleibt.",
     )
-    return _skaliere(daten, float(geliefert) / teiler, hinweis)
 
 
 def _mit_reihe(daten: Kursdaten, reihe, teiler: float) -> Kursdaten | None:
@@ -166,7 +164,7 @@ def _basis(waehrung: str) -> tuple[str, float]:
     return waehrung, 1.0
 
 
-def _skaliere(daten: Kursdaten, faktor: float, hinweis: str) -> Kursdaten:
+def _skaliere(daten: Kursdaten, faktor: float, hinweis: str, waehrung: str) -> Kursdaten:
     balken = tuple(
         Bar(
             bar.zeit,
@@ -181,7 +179,7 @@ def _skaliere(daten: Kursdaten, faktor: float, hinweis: str) -> Kursdaten:
     )
     return replace(
         daten,
-        waehrung="EUR",
+        waehrung=waehrung,
         preis=daten.preis * faktor,
         schluesse=tuple(wert * faktor for wert in daten.schluesse),
         hoch_52w=_mal(daten.hoch_52w, faktor),
