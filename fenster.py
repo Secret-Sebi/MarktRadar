@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
@@ -25,7 +26,7 @@ from beobachter import (
     speichere_zustand,
     warte_sekunden,
 )
-from seite import fehler_stand, lade_stand, seite_html, stand_bauen
+from seite import lade_stand, seite_html, stand_bauen
 
 _CACHE = UNIVERSUM
 
@@ -66,6 +67,14 @@ _QUELLE = Path(__file__).resolve().parent / "fenster_app" / "Beobachter.swift"
 
 
 def oeffne_fenster(sekunden, symbole) -> int:
+    from beobachter import DATENBANK
+    from lernen import analysen_nachholen, zuordnungen_nachholen
+
+    try:
+        analysen_nachholen(DATENBANK)
+        zuordnungen_nachholen(DATENBANK)
+    except sqlite3.Error as fehler:
+        sys.stderr.write(f"Nachrichten-Nachtrag fehlgeschlagen: {fehler}\n")
     fenster_merken(FENSTER_PID)
     zustand = lade_zustand(ZUSTAND)
     bild = _Bild()
@@ -272,13 +281,34 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
         gesamt_jetzt = gesamt
         hinweis_jetzt = listenhinweis
         rest = [3]
+        erledigt = set()
 
-        def teilweise(zeilen, anzahl_runde=runde, anzahl_gesamt=gesamt_jetzt, hinweis=hinweis_jetzt, namen=watchlist, budget=rest):
+        def beginne(symbol, anzahl_runde=runde, anzahl_gesamt=gesamt_jetzt, hinweis=hinweis_jetzt, menge=menge, erledigt=erledigt):
+            _zeigen(
+                bild,
+                (),
+                True,
+                _status(len(erledigt), anzahl_runde, anzahl_gesamt, symbol, hinweis),
+                datetime.now(BERLIN),
+                gesamt=anzahl_gesamt,
+                fertig=len(erledigt),
+                runde=anzahl_runde,
+                aktuell=symbol,
+                symbol=symbol,
+                offen=tuple(name for name in menge if name != symbol and name not in erledigt),
+                misst=True,
+            )
+
+        def teilweise(zeilen, anzahl_runde=runde, anzahl_gesamt=gesamt_jetzt, hinweis=hinweis_jetzt, namen=watchlist, budget=rest, menge=menge, erledigt=erledigt):
             karten = stand_bauen(zeilen, datetime.now(BERLIN), 0, True)["karten"]
             merken(DATENBANK, karten)
+            _bestand_vergessen()
             if budget[0] > 0:
                 budget[0] -= sende_hinweise(DATENBANK, karten, namen, macos_hinweis, budget[0])
             name = karten[-1]["name"] if karten else ""
+            symbol = karten[-1]["symbol"] if karten else ""
+            fertig_namen = {str(karte.get("symbol") or "") for karte in karten}
+            erledigt.update(fertig_namen)
             _zeigen(
                 bild,
                 zeilen,
@@ -289,16 +319,20 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
                 fertig=len(zeilen),
                 runde=anzahl_runde,
                 aktuell=name,
+                symbol=symbol,
+                offen=tuple(name_offen for name_offen in menge if name_offen not in fertig_namen),
+                misst=False,
             )
 
         try:
             moment, zeilen, zustand, naechste = beobachte(
-                menge, zustand, ausgabe, sekunden, bei_zeile=teilweise
+                menge, zustand, ausgabe, sekunden, bei_zeile=teilweise, bei_start=beginne
             )
             speichere_zustand(ZUSTAND, zustand)
             if zeilen:
                 karten = stand_bauen(zeilen, moment, naechste)["karten"]
                 merken(DATENBANK, karten)
+                _bestand_vergessen()
                 if rest[0] > 0:
                     sende_hinweise(DATENBANK, karten, watchlist, macos_hinweis, rest[0])
             naechste = pause_bei_luecke(naechste, luecke)
@@ -318,7 +352,14 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
             nach_runde(DATENBANK, zeilen)
         except Exception as fehler:  # noqa: BLE001
             naechste = 60
-            bild.setzen(fehler_stand(str(fehler)))
+            stand = dict(bild.lesen())
+            stand["arbeitet"] = False
+            stand["fehler"] = str(fehler)[:180]
+            lauf = dict(stand.get("lauf") or {})
+            lauf["arbeitet"] = False
+            lauf["misst"] = False
+            stand["lauf"] = lauf
+            bild.setzen(stand)
         if zu.is_set():
             return
         sofort.wait(naechste)
@@ -355,7 +396,7 @@ def _papier_lauf(bild) -> None:
     bild.setzen(stand)
 
 
-def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0, fertig: int = 0, runde: int = 0, aktuell: str = "") -> None:
+def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0, gesamt: int = 0, fertig: int = 0, runde: int = 0, aktuell: str = "", symbol: str = "", offen: tuple[str, ...] = (), misst: bool = False) -> None:
     global _letzte_zeilen
     if zeilen:
         _letzte_zeilen = tuple(zeilen)
@@ -397,6 +438,9 @@ def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0
         "gesamt": int(gesamt),
         "naechste": None if arbeitet else int(naechste),
         "letzte": (stand.get("bestand") or {}).get("letzte"),
+        "symbol": symbol,
+        "offen": list(offen),
+        "misst": bool(misst),
     }
     try:
         from papier import ansicht
@@ -507,6 +551,10 @@ def _prognose_qualitaet() -> dict:
 _BESTAND_CACHE = {"zeit": 0, "liste": (), "daten": {"zeilen": [], "universum": 0, "letzte": None}}
 
 
+def _bestand_vergessen() -> None:
+    _BESTAND_CACHE["zeit"] = 0
+
+
 def _bestand(moment) -> dict:
     from auswertung import bestand
     from universum import lade_universum
@@ -541,11 +589,14 @@ def _abdeckung() -> dict:
 
 def _mit_lernen(stand: dict) -> dict:
     from beobachter import DATENBANK
-    from lernen import einfluss, fortschritt
+    from einfluss import luecken
+    from lernen import einfluss, ereignisse, fortschritt
 
     return {
         **stand,
         "lernen": fortschritt(DATENBANK),
+        "ereignisse": list(ereignisse(DATENBANK)),
+        "luecken": luecken(),
         "nachrichten": {
             "tag": einfluss(DATENBANK, 1, namen=_namen(stand)),
             "woche": einfluss(DATENBANK, 7, namen=_namen(stand)),
@@ -555,11 +606,11 @@ def _mit_lernen(stand: dict) -> dict:
 
 
 def _suche(pfad: str) -> dict:
-    from suche import suche
+    from suche import suche_bericht
 
     text = parse_qs(urlparse(pfad).query).get("q", [""])[0]
     try:
-        treffer = suche(text)
+        treffer, hinweis = suche_bericht(text)
     except Exception as fehler:  # noqa: BLE001
         return {"treffer": [], "meldung": str(fehler)[:180]}
     return {
@@ -567,7 +618,7 @@ def _suche(pfad: str) -> dict:
             {"symbol": eintrag.symbol, "name": eintrag.name, "typ": eintrag.typ, "boerse": eintrag.boerse, "quelle": eintrag.quelle}
             for eintrag in treffer
         ],
-        "meldung": "" if treffer else "Nichts gefunden oder die Quelle antwortet nicht.",
+        "meldung": hinweis or ("" if treffer else "Nichts gefunden."),
     }
 
 

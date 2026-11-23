@@ -195,7 +195,7 @@ def runde(pfad, zeilen, namen: set[str], kurs, jetzt: datetime, nur_verkauf: boo
             kapital_buchen(pfad, name, _START, "eroeffnung", jetzt.isoformat())
         bestand = _positionen(pfad, name)
         eigene = {str(zeile["symbol"]) for zeile in bestand}
-        sperre = kauf_gesperrt(cash + _marktwert(pfad, name), *_spitze_konto(pfad, name, cash + _marktwert(pfad, name)), len(eigene))
+        konto_sperre = kauf_gesperrt(cash + _marktwert(pfad, name), *_spitze_konto(pfad, name, cash + _marktwert(pfad, name)), 0)
         stops = {str(zeile["symbol"]): _zahl(zeile.get("stop")) for zeile in bestand}
         kauefe = 0
         for zeile in zeilen or ():
@@ -224,7 +224,7 @@ def runde(pfad, zeilen, namen: set[str], kurs, jetzt: datetime, nur_verkauf: boo
                     _jetzt_merken(pfad, name, symbol, preis)
                     _notiz(pfad, name, symbol, "HOLD", grund, stand)
                 continue
-            if nur_verkauf or sperre or kauefe >= 3:
+            if nur_verkauf or konto_sperre or not platz_frei(len(eigene), kauefe):
                 continue
             hinweis = _daten_hinweis(zeile)
             if hinweis:
@@ -330,17 +330,17 @@ def anpassen(pfad, name: str = "Adaptiv") -> str:
     return "Schwelle bleibt. Ohne bestandene Prüfung auf späteren Fällen ändert sich nichts."
 
 
-def _momentum(_zeile, reihe: tuple[float, ...]):
+def _momentum(zeile, reihe: tuple[float, ...]):
     if len(reihe) < 21 or reihe[-21] <= 0 or reihe[-6] <= 0:
         return "SKIP", "Zu wenige Schlüsse für das Momentum. Kein Kauf.", None
     lang = reihe[-1] / reihe[-21] - 1
     funf = reihe[-1] / reihe[-6] - 1
     merkmale = (lang, funf)
     if lang > 0.02 and funf > 0:
-        return "BUY", "Der Schluss liegt nach 20 Tagen und nach 5 Tagen höher.", merkmale
+        return _mit_meldung(zeile, "Momentum", "BUY", "Der Schluss liegt nach 20 Tagen und nach 5 Tagen höher.", merkmale)
     if lang < 0:
-        return "SELL", "Die Bewegung über 20 Tage ist negativ.", merkmale
-    return "HOLD", "Das Momentum ist nicht klar.", merkmale
+        return _mit_meldung(zeile, "Momentum", "SELL", "Die Bewegung über 20 Tage ist negativ.", merkmale)
+    return _mit_meldung(zeile, "Momentum", "HOLD", "Das Momentum ist nicht klar.", merkmale)
 
 
 def _rsi_bei(reihe: tuple[float, ...], unten: float, oben: float, verkauf: float):
@@ -386,17 +386,17 @@ def _ausbruch(_zeile, reihe):
     return "HOLD", "Kein Ausbruch über die vorigen Schlüsse.", merkmale
 
 
-def _trend(_zeile, reihe):
+def _trend(zeile, reihe):
     kurz = sma(reihe, 20)
     lang = sma(reihe, 50)
     if kurz is None or lang is None or lang == 0:
         return "SKIP", "Der gleitende Schnitt fehlt. Kein Kauf.", None
     merkmale = (reihe[-1] / lang - 1, 1.0 if kurz > lang else 0.0)
     if reihe[-1] > kurz > lang:
-        return "BUY", "Der Schluss liegt über dem 20- und dem 50-Tage-Schnitt.", merkmale
+        return _mit_meldung(zeile, "Trend", "BUY", "Der Schluss liegt über dem 20- und dem 50-Tage-Schnitt.", merkmale)
     if reihe[-1] < lang:
-        return "SELL", "Der Schluss liegt unter dem 50-Tage-Schnitt.", merkmale
-    return "HOLD", "Kein klarer Trend.", merkmale
+        return _mit_meldung(zeile, "Trend", "SELL", "Der Schluss liegt unter dem 50-Tage-Schnitt.", merkmale)
+    return _mit_meldung(zeile, "Trend", "HOLD", "Kein klarer Trend.", merkmale)
 
 
 def _gleitend(_zeile, reihe):
@@ -450,7 +450,7 @@ def _fundament(zeile, feld: str, satz: str):
     text = str(_feld(zeile, "fundamental") or "")
     if not text or text == "fehlt" or feld not in text:
         return "SKIP", f"{feld} fehlt. Kein Kauf.", None
-    return "SKIP", satz, None
+    return _mit_meldung(zeile, "Fundament", "SKIP", satz, None)
 
 
 def _substanz(zeile, _reihe):
@@ -476,8 +476,22 @@ def _fundament_mix(zeile, _reihe):
     return "SKIP", "Mehrere Kennzahlen bleiben ein Hinweis, keine Kaufnote.", None
 
 
+def _mit_meldung(zeile, name: str, entscheidung: str, grund: str, merkmale):
+    bild = _feld(zeile, "news_bild")
+    if not isinstance(bild, dict) or not bild.get("ereignis"):
+        return entscheidung, grund, merkmale
+    from nachrichten_analyse import lesart
+
+    return entscheidung, f"{grund} {lesart(name, bild)}", merkmale
+
+
 def _news(zeile, art: str, satz: str):
     gesehen = str(_feld(zeile, "news_art") or "")
+    bild = _feld(zeile, "news_bild")
+    if isinstance(bild, dict) and bild.get("ereignis"):
+        from nachrichten_analyse import lesart
+
+        return "SKIP", f"{lesart('Nachrichten', bild)} {satz}", None
     if not gesehen:
         return "SKIP", "Keine Nachricht zum Entscheidungszeitpunkt. Kein Kauf.", None
     if gesehen != art:
@@ -672,6 +686,11 @@ def _small(_zeile, _reihe):
 
 
 def _defensiv(zeile, reihe):
+    from nachrichten_analyse import defensiv_stoppt, lesart
+
+    bild = _feld(zeile, "news_bild")
+    if defensiv_stoppt(bild if isinstance(bild, dict) else None):
+        return "HOLD", lesart("Defensiv", bild), None
     name, _grund, merkmale = _trend(zeile, reihe)
     wert = volatilitaet_rechnung(reihe)
     if wert is None:
@@ -719,15 +738,15 @@ def _statistik(zeile, _reihe):
     return "SKIP", "Die statistische Basis reicht nicht. Kein Kauf.", None
 
 
-def _experiment(_zeile, reihe):
+def _experiment(zeile, reihe):
     wert = rsi(reihe, 14) if len(reihe) >= 15 else None
     kurz = sma(reihe, 20)
     if wert is None or kurz is None:
         return "SKIP", "RSI oder der kurze Schnitt fehlt. Kein Kauf.", None
     merkmale = (wert / 100.0,)
     if 30 <= wert <= 40 and reihe[-1] < kurz:
-        return "BUY", "Isolierter Versuch unter dem kurzen Schnitt. Gilt nur für dieses Buch.", merkmale
-    return "HOLD", "Der isolierte Versuch ist nicht ausgelöst.", merkmale
+        return _mit_meldung(zeile, "Experiment", "BUY", "Isolierter Versuch unter dem kurzen Schnitt. Gilt nur für dieses Buch.", merkmale)
+    return _mit_meldung(zeile, "Experiment", "HOLD", "Der isolierte Versuch ist nicht ausgelöst.", merkmale)
 
 
 _REGELN = {
@@ -1728,9 +1747,30 @@ def _version(pfad, name: str) -> int:
 
 def _lernstatus(pfad, name: str) -> str:
     pruefung = _letzte_pruefung(pfad, name)
+    offen, zu = _fallzahlen(pfad, name)
     if pruefung.get("besser"):
-        return f"Version {_version(pfad, name)} ist auf späteren Fällen freigegeben."
-    return "Regelbasiert. Gespeicherte Gewichtsschritte sind nicht freigegeben."
+        return f"Version {_version(pfad, name)} ist auf späteren Fällen freigegeben. {zu} abgeschlossene Fälle."
+    if zu == 0:
+        return f"Regelbasiert. {offen} offene Fälle, noch kein abgeschlossener Lernfall. Skip und Hold zählen nicht."
+    return f"Regelbasiert. {zu} abgeschlossene Fälle, kein freigegebenes Modell. {offen} bleiben offen."
+
+
+def _fallzahlen(pfad, name: str) -> tuple[int, int]:
+    if not pfad.exists():
+        return 0, 0
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "ki_haendler_fall" not in tabellen:
+            return 0, 0
+        offen = verbindung.execute(
+            "SELECT COUNT(*) FROM ki_haendler_fall WHERE haendler = ? AND ausstieg IS NULL",
+            (name,),
+        ).fetchone()[0]
+        zu = verbindung.execute(
+            "SELECT COUNT(*) FROM ki_haendler_fall WHERE haendler = ? AND ausstieg IS NOT NULL",
+            (name,),
+        ).fetchone()[0]
+    return int(offen), int(zu)
 
 
 def _fenster_rendite(pfad, name: str, tage: int) -> str:
@@ -1956,20 +1996,29 @@ def _letzte_pruefung(pfad, name: str) -> dict:
     return {"besser": bool(zeile[0]), "grund": grund, "test": zeile[2], "zeit": zeile[3], "status": status}
 
 
+def platz_frei(offen: int, schon_in_runde: int = 0) -> bool:
+    """Zehn offene Positionen gelten je Trader. Drei Käufe in einer Runde heben das nicht auf."""
+    from papier import grenzen
+
+    if schon_in_runde >= 3:
+        return False
+    return offen < int(grenzen()["offen"])
+
+
 def pruefe(pfad, name: str) -> dict:
     """Trainiert nur auf früheren Fällen und prüft spätere. Das aktive Modell bleibt unverändert."""
     _tabellen(pfad)
     with sqlite3.connect(pfad) as verbindung:
         zeilen = verbindung.execute(
             """
-            SELECT id, merkmale, ergebnis, zeit, ausstieg_zeit, einstieg, menge FROM ki_haendler_fall
+            SELECT id, merkmale, ergebnis, zeit, ausstieg_zeit, einstieg, menge, symbol FROM ki_haendler_fall
             WHERE haendler = ? AND ausstieg IS NOT NULL AND quelle = 'simulation'
             ORDER BY id
             """,
             (name,),
         ).fetchall()
     faelle = []
-    for nummer, merkmale, ergebnis, zeit, ausstieg_zeit, einstieg, menge in zeilen:
+    for nummer, merkmale, ergebnis, zeit, ausstieg_zeit, einstieg, menge, symbol in zeilen:
         try:
             werte = tuple(float(wert) for wert in json.loads(merkmale))
         except (TypeError, json.JSONDecodeError):
@@ -1987,6 +2036,7 @@ def pruefe(pfad, name: str) -> dict:
                 "ausstieg_zeit": ausstieg_zeit,
                 "einstieg": _zahl(einstieg),
                 "menge": _zahl(menge),
+                "symbol": str(symbol or ""),
             }
         )
     if any(_fall_zeit(fall) is None for fall in faelle):
@@ -2052,6 +2102,7 @@ def pruefe(pfad, name: str) -> dict:
         and benchmark_summe is not None
         and modell_ende > start + benchmark_summe
         and risiko_ok
+        and _kosten_halten(genommen, test)
     ):
         besser = True
         status = "Geprüft"
@@ -2063,7 +2114,8 @@ def pruefe(pfad, name: str) -> dict:
         f"{status}. Validierung wählt {wahl}. Validierung Modell {_zahl_text(val_modell)}, Regel {_zahl_text(val_regel)}. "
         f"Test Modell {_zahl_text(modell_netto)} auf {len(genommen)} von {len(test)} späteren Fällen, Regel {_zahl_text(regel_netto)}. "
         f"Untere Grenze {_zahl_text(unsicherheit)}. Equity ab {start:.2f}, Modellende {_zahl_text(modell_ende)}, Regelende {_zahl_text(regel_ende)}. "
-        f"{benchmark_text} Spread und Slippage sind für beide nicht gemessen. "
+        f"{benchmark_text} Spread und Slippage sind nicht gemessen. "
+        "Zusätzliche Kostenannahme 0,10 Prozent je Seite, kein Messwert. "
         "Sharpe nicht ausreichend Daten. Aktives Modell unverändert."
     )
     bericht_gewichte = list(modell.gewichte) if besser else None
@@ -2136,36 +2188,71 @@ def _equity_aus_nettos(start: float, nettos: list[float]) -> list[float]:
     return pfad
 
 
+def _kosten_halten(genommen: list[dict], test: list[dict]) -> bool:
+    """Annahme, kein gemessener Spread: 0,10 Prozent je Seite zusätzlich."""
+    modell = _mittel_unter_annahme(genommen)
+    regel = _mittel_unter_annahme(test)
+    return modell is not None and regel is not None and modell > regel
+
+
+def _mittel_unter_annahme(faelle: list[dict]) -> float | None:
+    werte = []
+    for fall in faelle:
+        netto = _netto_unter_annahme(fall, Decimal("0.001"))
+        if netto is None:
+            return None
+        werte.append(float(netto))
+    return _mittel(werte)
+
+
+def _netto_unter_annahme(fall: dict, satz: Decimal) -> Decimal | None:
+    einstieg = fall.get("einstieg")
+    menge = fall.get("menge")
+    netto = fall.get("netto")
+    if einstieg is None or menge is None or netto is None or einstieg <= 0 or menge <= 0:
+        return None
+    extra = (einstieg * menge * satz * 2).quantize(Decimal("0.01"))
+    return Decimal(str(netto)) - extra
+
+
 def _benchmark_summe(pfad, faelle: list[dict]) -> tuple[float | None, str]:
-    """Indexkauf über dieselbe Haltedauer und dieselben Gebühren. Lücken bleiben leer."""
-    reihen = _index_reihe(pfad)
+    """Index des Marktes über dieselbe Haltedauer. Ein fremder Index zählt nicht."""
+    reihen = _index_reihen(pfad)
     if not reihen:
         return None, "Benchmark nicht gemessen. Keine Indexreihe."
+    from technik import vergleichsindex
+
     summe = 0.0
     luecken = 0
+    benutzt: set[str] = set()
     for fall in faelle:
         einstieg = fall.get("einstieg")
         menge = fall.get("menge")
-        start = _index_zur_zeit(reihen, fall.get("zeit"))
-        ende = _index_zur_zeit(reihen, fall.get("ausstieg_zeit"))
-        if einstieg is None or menge is None or einstieg <= 0 or menge <= 0 or start is None or ende is None or start <= 0:
+        index = vergleichsindex(str(fall.get("symbol") or ""))
+        reihe = reihen.get(index) or []
+        start = _index_zur_zeit(reihe, fall.get("zeit"))
+        ende = _index_zur_zeit(reihe, fall.get("ausstieg_zeit"))
+        if not index or len(reihe) < 2 or einstieg is None or menge is None or einstieg <= 0 or menge <= 0 or start is None or ende is None or start <= 0:
             luecken += 1
             continue
+        benutzt.add(index)
         ausstieg = einstieg * (Decimal(str(ende)) / Decimal(str(start)))
         _brutto, _ein, _aus, netto = _kosten(einstieg, ausstieg, menge)
         summe += float(netto)
     if luecken or not faelle:
         return None, f"Benchmark nicht gemessen. Datenlücke bei {luecken} Fällen."
-    return summe, "Benchmark ist der Index über dieselbe Haltedauer."
+    namen = ", ".join(sorted(benutzt))
+    return summe, f"Benchmark ist {namen} über dieselbe Haltedauer."
 
 
-def _index_reihe(pfad) -> list[tuple[float, float]]:
+def _index_reihen(pfad) -> dict[str, list[tuple[float, float]]]:
     if not pfad.exists():
-        return []
+        return {}
+    reihen = {}
     with sqlite3.connect(pfad) as verbindung:
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if "kurse" not in tabellen:
-            return []
+            return {}
         for symbol in ("^GDAXI", "^GSPC"):
             zeilen = verbindung.execute(
                 "SELECT zeit, schluss FROM kurse WHERE symbol = ? AND schluss > 0 ORDER BY zeit",
@@ -2173,8 +2260,8 @@ def _index_reihe(pfad) -> list[tuple[float, float]]:
             ).fetchall()
             reihe = [(float(zeit), float(schluss)) for zeit, schluss in zeilen if zeit is not None and schluss is not None]
             if len(reihe) >= 2:
-                return reihe
-    return []
+                reihen[symbol] = reihe
+    return reihen
 
 
 def _index_zur_zeit(reihe: list[tuple[float, float]], zeit) -> float | None:
@@ -2223,10 +2310,13 @@ def _meta_bericht(pfad, zeilen: list[dict]) -> dict:
     if belastbar:
         summe = sum(max(zeile["score"], 0.0) for zeile in belastbar) or 1.0
         gewichte = {zeile["name"]: round(max(zeile["score"], 0.0) / summe, 2) for zeile in belastbar}
-        hinweis = "Vorschlag aus der Stichprobe. Keine Order und keine Änderung der Risikogrenzen."
+        hinweis = "Vorschlag aus der Stichprobe. Keine Order und keine Änderung der Risikogrenzen. Nachrichten sind nicht als Gewichtung freigegeben."
     else:
         gewichte = {}
-        hinweis = "Keine Gewichtung. Dafür fehlt eine bestandene unabhängige Prüfung. Risikogrenzen bleiben."
+        hinweis = (
+            "Keine Gewichtung. Dafür fehlt eine bestandene unabhängige Prüfung. "
+            "Risikogrenzen bleiben. Nachrichten sind nicht als Gewichtung freigegeben."
+        )
     if krypto_belastbar:
         summe = sum(max(zeile["score"], 0.0) for zeile in krypto_belastbar) or 1.0
         krypto_gewichte = {zeile["name"]: round(max(zeile["score"], 0.0) / summe, 2) for zeile in krypto_belastbar}

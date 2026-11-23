@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from analyse import BERLIN, ist_wichtig
+from einfluss import faktoren
 
 _FELDER = (
     "symbol",
@@ -33,6 +34,7 @@ _FELDER = (
     "fenster_faelle",
     "muster",
     "muster_version",
+    "schritte",
 )
 
 
@@ -59,6 +61,56 @@ def merken(pfad: Path, karten) -> None:
 
 
 _US_KLASSE = re.compile(r"^[A-Z]{1,5}\.[A-Z]$")
+_PFLICHT_SCHRITTE = ("kurs", "historie", "technik", "fundamental", "nachrichten", "modell", "muster", "auswertung")
+_ERLAUBT = {
+    "kurs": {"ok"},
+    "historie": {"ok"},
+    "technik": {"ok"},
+    "fundamental": {"ok", "nicht_verfuegbar", "nicht_anwendbar"},
+    "nachrichten": {"ok", "nicht_verfuegbar"},
+    "modell": {"ok"},
+    "muster": {"ok"},
+    "auswertung": {"ok"},
+}
+
+
+def schritte_lesen(roh) -> dict:
+    if isinstance(roh, dict):
+        return roh
+    if not roh:
+        return {}
+    try:
+        daten = json.loads(str(roh))
+    except json.JSONDecodeError:
+        return {}
+    return daten if isinstance(daten, dict) else {}
+
+
+def _schritt_stand(eintrag) -> str:
+    if isinstance(eintrag, dict):
+        return str(eintrag.get("stand") or "")
+    return str(eintrag or "")
+
+
+def analyse_code(lage: str, schritte_roh, preis_da: bool, datenstatus: str, ungewoehnlich) -> str:
+    """Ein frischer Kurs oder ein leeres Tagesfeld ist keine vollständige Messung."""
+    if lage == "veraltet":
+        return "veraltet"
+    schritte = schritte_lesen(schritte_roh)
+    if not schritte:
+        if not preis_da or str(datenstatus or "") in ("", "unvollstaendig"):
+            return "fehlgeschlagen"
+        if ungewoehnlich is None:
+            return "wartet"
+        return "teilweise"
+    if _schritt_stand(schritte.get("kurs")) == "fehler" and not any(
+        _schritt_stand(schritte.get(name)) for name in _PFLICHT_SCHRITTE if name != "kurs"
+    ):
+        return "fehlgeschlagen"
+    staende = {name: _schritt_stand(schritte.get(name)) for name in _PFLICHT_SCHRITTE}
+    if all(staende[name] in _ERLAUBT[name] for name in _PFLICHT_SCHRITTE):
+        return "abgeschlossen"
+    return "teilweise"
 
 
 def bestand(pfad: Path, symbole: tuple[str, ...] = (), jetzt: int | None = None, watchlist: tuple[str, ...] = ()) -> dict:
@@ -72,7 +124,7 @@ def bestand(pfad: Path, symbole: tuple[str, ...] = (), jetzt: int | None = None,
             for zeile in verbindung.execute(
                 """
                 SELECT symbol, name, preis, tag, tag_wert, richtung, datenstatus, bereich, kurszeit,
-                       aufwaerts, herkunft, muster, ungewoehnlich, aktualisiert
+                       aufwaerts, herkunft, muster, ungewoehnlich, aktualisiert, schritte
                 FROM auswertung
                 """
             ):
@@ -125,14 +177,16 @@ def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[flo
             "richtung": "",
             "datenstatus": "unvollstaendig",
             "bereich": _bereich_symbol(symbol),
-            "analyse": "ausstehend",
+            "analyse": "nicht_gestartet",
+            "schritte": {},
             "kurszeit": None,
             "aufwaerts": None,
             "herkunft": "",
             "lage": "ausstehend",
             "reihe": reihe if reihe and len(reihe) >= 2 else None,
+            "faktoren": list(faktoren(None, None)),
         }
-    _symbol, name, preis, tag, tag_wert, richtung, datenstatus, bereich, kurszeit, aufwaerts, herkunft, muster, ungewoehnlich, _aktualisiert = zeile
+    _symbol, name, preis, tag, tag_wert, richtung, datenstatus, bereich, kurszeit, aufwaerts, herkunft, muster, ungewoehnlich, _aktualisiert, schritte = zeile
     qualitaet = str(_bild(muster).get("qualitaet") or "")
     if qualitaet not in ("vorsichtig", "belastbarer"):
         aufwaerts = None
@@ -146,14 +200,7 @@ def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[flo
     else:
         lage = "analysiert"
     preis_da = bool(preis) and str(preis) not in ("—", "-")
-    if lage == "veraltet":
-        analyse = "veraltet"
-    elif gespeichert == "ok" and frische == "ok" and preis_da and ungewoehnlich is not None:
-        analyse = "abgeschlossen"
-    elif not preis_da or gespeichert in ("", "unvollstaendig") or frische == "unvollstaendig":
-        analyse = "fehlgeschlagen"
-    else:
-        analyse = "ausstehend"
+    analyse = analyse_code(lage, schritte, preis_da, gespeichert, ungewoehnlich)
     vorsprung = aufwaerts if isinstance(aufwaerts, (int, float)) and not isinstance(aufwaerts, bool) else None
     bewegung = tag_wert if isinstance(tag_wert, (int, float)) and not isinstance(tag_wert, bool) else None
     return {
@@ -166,11 +213,13 @@ def _bestand_zeile(symbol: str, zeile: tuple | None, jetzt: int, reihe: list[flo
         "datenstatus": gespeichert or frische,
         "bereich": _markt(symbol, str(bereich or "")),
         "analyse": analyse,
+        "schritte": schritte_lesen(schritte),
         "kurszeit": kurszeit if isinstance(kurszeit, int) and not isinstance(kurszeit, bool) else None,
         "aufwaerts": vorsprung,
         "herkunft": str(herkunft or ""),
         "lage": lage,
         "reihe": reihe if reihe and len(reihe) >= 2 else None,
+        "faktoren": list(faktoren(schritte_lesen(schritte), None)),
     }
 
 
@@ -470,6 +519,7 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         ("muster", "TEXT"),
         ("muster_version", "INTEGER"),
         ("hinweis_stand", "TEXT"),
+        ("schritte", "TEXT"),
     ):
         if name not in vorhanden:
             verbindung.execute(f"ALTER TABLE auswertung ADD COLUMN {name} {art}")

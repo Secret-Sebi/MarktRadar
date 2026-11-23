@@ -20,16 +20,29 @@ class Treffer:
 
 
 def suche(text: str, oeffnen=urlopen) -> tuple[Treffer, ...]:
+    treffer, _hinweis = suche_bericht(text, oeffnen)
+    return treffer
+
+
+def suche_bericht(text: str, oeffnen=urlopen) -> tuple[tuple[Treffer, ...], str]:
     begriff = " ".join(text.split())
     if len(begriff) < 2:
-        return ()
+        return (), ""
     treffer: tuple[Treffer, ...] = ()
+    fehler = 0
     for leser in (_yahoo, _gecko):
         try:
             treffer = treffer + leser(begriff, oeffnen)
         except (ConnectionError, LookupError, json.JSONDecodeError, TimeoutError, ValueError):
-            continue
-    return _ohne_doppelte(treffer)[:8]
+            fehler += 1
+    treffer = _ohne_doppelte(treffer)[:8]
+    if treffer:
+        return treffer, ""
+    if fehler == 2:
+        return (), "Die Kurssuche antwortet nicht."
+    if fehler:
+        return (), "Nichts gefunden. Eine Quelle hat nicht geantwortet."
+    return (), ""
 
 
 def suche_aus_yahoo(roh: dict) -> tuple[Treffer, ...]:

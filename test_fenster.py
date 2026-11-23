@@ -126,6 +126,50 @@ class FensterTests(unittest.TestCase):
         ergebnis = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
         self.assertEqual(ergebnis.returncode, 0, ergebnis.stderr)
 
+    def test_suche_verwirft_eine_alte_antwort(self):
+        import subprocess
+        from pathlib import Path
+
+        quelle = Path("fenster_app/seite.html").read_text(encoding="utf-8")
+        funktion = quelle[quelle.index("function sucheNochAktuell"):quelle.index("function oeffneSymbol")]
+        script = funktion + """
+        if (!sucheNochAktuell(2, 2, "Apple", "Apple")) throw new Error("aktuell");
+        if (sucheNochAktuell(1, 2, "NVIDIA", "Apple")) throw new Error("alt");
+        if (sucheNochAktuell(2, 2, "NVIDIA", "Apple")) throw new Error("text");
+        """
+        ergebnis = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(ergebnis.returncode, 0, ergebnis.stderr)
+
+    def test_quellenausfall_ist_keine_leere_suche(self):
+        from unittest.mock import patch
+
+        from suche import suche_bericht
+
+        def weg(*_args):
+            raise ConnectionError("weg")
+
+        with patch("suche._yahoo", side_effect=weg), patch("suche._gecko", side_effect=weg):
+            treffer, hinweis = suche_bericht("nvidia")
+        self.assertEqual(treffer, ())
+        self.assertEqual(hinweis, "Die Kurssuche antwortet nicht.")
+        with patch("suche._yahoo", return_value=()), patch("suche._gecko", return_value=()):
+            treffer, hinweis = suche_bericht("nvidia")
+        self.assertEqual(treffer, ())
+        self.assertEqual(hinweis, "")
+
+    def test_technikschritt_folgt_nicht_der_historie(self):
+        import json
+        from types import SimpleNamespace
+
+        from beobachter import _schritte_text
+
+        daten = SimpleNamespace(datenstatus="ok", preis=10.0, kurszeit=1)
+        schritte = json.loads(_schritte_text(daten, SimpleNamespace(vollstaendig=False), "fehlt", "ok", "ok", "ok"))
+        self.assertEqual(schritte["historie"]["stand"], "nicht_ausreichend")
+        self.assertEqual(schritte["technik"]["stand"], "ok")
+        ohne = json.loads(_schritte_text(daten, None, "fehlt", "ok", "ok", "ok"))
+        self.assertEqual(ohne["technik"]["stand"], "fehlt")
+
     def test_liste_nimmt_mehr_als_25_werte(self):
         import tempfile
         from pathlib import Path

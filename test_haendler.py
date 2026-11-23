@@ -479,8 +479,8 @@ class HaendlerTests(unittest.TestCase):
             _tabellen(pfad)
             with sqlite3.connect(pfad) as verbindung:
                 verbindung.execute("CREATE TABLE IF NOT EXISTS kurse (symbol TEXT, zeit INTEGER, schluss REAL)")
-                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 100)", (int(datetime(2026, 1, 1, tzinfo=BERLIN).timestamp()),))
-                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 90)", (int(datetime(2026, 6, 1, tzinfo=BERLIN).timestamp()),))
+                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GSPC', ?, 100)", (int(datetime(2026, 1, 1, tzinfo=BERLIN).timestamp()),))
+                verbindung.execute("INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GSPC', ?, 90)", (int(datetime(2026, 6, 1, tzinfo=BERLIN).timestamp()),))
                 for _block, monat in ((0, 1), (1, 3), (2, 5)):
                     for paar in range(12):
                         for _gewinner, werte, netto in ((True, "[1, 0]", "10.00"), (False, "[0, 1]", "-1.00")):
@@ -666,11 +666,11 @@ class HaendlerTests(unittest.TestCase):
                 for tag in range(1, 13):
                     eintritt = datetime(2026, 5, tag, tzinfo=BERLIN)
                     verbindung.execute(
-                        "INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 100)",
+                        "INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GSPC', ?, 100)",
                         (int(eintritt.timestamp()),),
                     )
                     verbindung.execute(
-                        "INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GDAXI', ?, 10)",
+                        "INSERT INTO kurse (symbol, zeit, schluss) VALUES ('^GSPC', ?, 10)",
                         (int(eintritt.timestamp()) + 6 * 3600,),
                     )
                 for monat, netto_gut, netto_schlecht in ((1, "10.00", "-1.00"), (3, "-0.30", "-1.00"), (5, "-0.30", "-1.00")):

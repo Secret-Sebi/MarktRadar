@@ -227,7 +227,8 @@ function aktienKarte(zeile) {
   const tag = el("div", richtungKlasse(zeile) === "hoch" ? "plus" : richtungKlasse(zeile) === "runter" ? "minus" : "ruhig");
   text(tag, zahl(zeile.tag_wert) ? zeile.tag : LEER);
   const chips = el("div", "chips");
-  chips.append(datenChip(zeile), chip(analyseWort(zeile.analyse), zeile.analyse === "abgeschlossen" ? "plus" : "warn"), chip("Nicht validiert", "warn"));
+  const analyse = sichtAnalyse(zeile);
+  chips.append(datenChip(zeile), chip(analyseWort(analyse), analyse === "abgeschlossen" ? "plus" : "warn"), chip("Nicht validiert", "warn"));
   karte.append(name, symbol, preis, tag, spark(zeile.reihe), chips);
   karte.addEventListener("click", function () { detail = { art: "aktie", id: zeile.symbol }; zeichnen(standJetzt); });
   return karte;
@@ -334,12 +335,103 @@ function fortschritt(block) {
   });
 }
 
+function lueckenSatz() {
+  const luecken = (standJetzt && standJetzt.luecken) || {};
+  const satz = el("p", "ruhig");
+  text(satz, [luecken.prognose, luecken.makro, luecken.kapital, luecken.branche].filter(Boolean).join(" ") || LEER);
+  return satz;
+}
+
+function faktorenListe(zeile) {
+  const block = el("section", "panel");
+  const titel = el("h2");
+  text(titel, "Einfluss");
+  block.append(titel);
+  (zeile.faktoren || []).forEach(function (faktor) {
+    const zeileText = el("div", "zeile");
+    const name = el("span");
+    const wert = el("span", faktor.stand === "fehler" ? "warn" : "");
+    text(name, faktor.name || "");
+    text(wert, (faktor.stand || LEER) + (faktor.validiert ? "" : ""));
+    zeileText.append(name, wert);
+    block.append(zeileText);
+    const satz = el("p", "ruhig");
+    text(satz, faktor.satz || "");
+    block.append(satz);
+  });
+  if (!(zeile.faktoren || []).length) {
+    const leer = el("p", "ruhig");
+    text(leer, "Einflussbereiche sind für diesen Namen noch nicht gemessen.");
+    block.append(leer);
+  }
+  return block;
+}
+
+function ereignisListe(liste, grenze) {
+  const block = el("section", "panel");
+  const titel = el("h2");
+  text(titel, "Nachrichten");
+  block.append(titel);
+  const zeigen = (liste || []).slice(0, grenze);
+  if (!zeigen.length) {
+    const leer = el("p", "ruhig");
+    text(leer, "Noch keine gespeicherte Ereignisanalyse. Eine Überschrift ist kein Kaufsignal.");
+    block.append(leer);
+    return block;
+  }
+  zeigen.forEach(function (eintrag) {
+    const satz = el("p");
+    text(satz, (eintrag.symbol || "") + " · " + (eintrag.ereignis || LEER) + " · Stimmung " + (eintrag.stimmung || LEER) + " · Stärke " + (eintrag.staerke == null ? LEER : eintrag.staerke) + ". " + (eintrag.zuordnung || "Kursreaktion noch nicht messbar") + ". Nicht validiert.");
+    block.append(satz);
+  });
+  return block;
+}
+
 function analyseWort(wert) {
-  if (wert === "abgeschlossen") return "Messung fertig";
-  if (wert === "ausstehend") return "Ausstehend";
+  if (wert === "abgeschlossen") return "Vollständig";
+  if (wert === "teilweise") return "Teilweise";
+  if (wert === "nicht_gestartet") return "Nicht gestartet";
+  if (wert === "warteschlange") return "Warteschlange";
+  if (wert === "laeuft") return "Läuft";
+  if (wert === "wartet") return "Wartet auf Daten";
+  if (wert === "ausstehend") return "Nicht gestartet";
   if (wert === "veraltet") return "Veraltet";
   if (wert === "fehlgeschlagen") return "Fehlgeschlagen";
   return LEER;
+}
+
+function schrittListe(zeile) {
+  const block = el("div");
+  const namen = {
+    kurs: "Kursdaten",
+    historie: "Historische Kurse",
+    technik: "Technik",
+    fundamental: "Fundamentaldaten",
+    nachrichten: "Nachrichten",
+    modell: "Modell",
+    muster: "Muster",
+    auswertung: "Auswertung"
+  };
+  const schritte = zeile.schritte || {};
+  Object.keys(namen).forEach(function (name) {
+    if (!schritte[name]) return;
+    const stand = schritte[name].stand || schritte[name];
+    const zeileText = el("div", "zeile");
+    const links = el("span");
+    const rechts = el("span");
+    text(links, namen[name]);
+    text(rechts, (stand === "ok" ? "ok" : (stand || LEER)) + (schritte[name].grund ? " · " + schritte[name].grund : ""));
+    zeileText.append(links, rechts);
+    block.append(zeileText);
+  });
+  return block;
+}
+
+function sichtAnalyse(zeile) {
+  const lauf = (standJetzt && standJetzt.lauf) || {};
+  if (lauf.misst && lauf.symbol && zeile.symbol === lauf.symbol) return "laeuft";
+  if (lauf.arbeitet && (lauf.offen || []).indexOf(zeile.symbol) !== -1) return "warteschlange";
+  return zeile.analyse || "";
 }
 
 function laufPanel(aktien) {
@@ -348,6 +440,7 @@ function laufPanel(aktien) {
   const titel = el("h2");
   let zustand = "Leerlauf";
   if (verbindung !== "verbunden") zustand = verbindung;
+  else if (standJetzt && standJetzt.fehler) zustand = standJetzt.fehler;
   else if (lauf.arbeitet) zustand = "Analyse läuft";
   text(titel, "Systemstatus: " + zustand);
   const zeilen = el("div");
@@ -360,7 +453,7 @@ function laufPanel(aktien) {
     block.append(name, wert);
     zeilen.append(block);
   }
-  zeile("Aktuell", lauf.aktuell || "keine");
+  zeile(lauf.misst ? "Aktuell" : "Zuletzt gemessen", lauf.aktuell || "keine");
   if (lauf.runde_von) {
     zeile("Aktuelle Runde", lauf.runde_fertig + " / " + lauf.runde_von);
     zeile("Fortschritt", Math.round((lauf.runde_fertig / lauf.runde_von) * 1000) / 10 + " %");
@@ -368,8 +461,11 @@ function laufPanel(aktien) {
     zeile("Aktuelle Runde", "keine");
   }
   zeile("Kursdaten aktuell", aktien.filter(function (eintrag) { return eintrag.lage === "analysiert"; }).length + " / " + aktien.length);
-  zeile("Messung abgeschlossen", aktien.filter(function (eintrag) { return eintrag.analyse === "abgeschlossen"; }).length + " / " + aktien.length);
-  zeile("Ausstehend", String(aktien.filter(function (eintrag) { return eintrag.analyse === "ausstehend"; }).length));
+  zeile("Vollständig", String(aktien.filter(function (eintrag) { return eintrag.analyse === "abgeschlossen"; }).length));
+  zeile("Teilweise", String(aktien.filter(function (eintrag) { return eintrag.analyse === "teilweise"; }).length));
+  zeile("Nicht gestartet", String(aktien.filter(function (eintrag) { return eintrag.analyse === "nicht_gestartet" || eintrag.analyse === "ausstehend"; }).length));
+  zeile("Wartet auf Daten", String(aktien.filter(function (eintrag) { return eintrag.analyse === "wartet"; }).length));
+  zeile("In der Warteschlange", String((lauf.offen || []).length));
   zeile("Fehlgeschlagen", String(aktien.filter(function (eintrag) { return eintrag.analyse === "fehlgeschlagen"; }).length));
   zeile("Letzte gespeicherte Messung", lauf.letzte ? new Date(lauf.letzte * 1000).toLocaleString("de-DE") : "nicht gespeichert");
   zeile("Nächste Runde", lauf.naechste ? "in " + Math.max(1, Math.round(lauf.naechste / 60)) + " Minuten" : "nicht geplant");
@@ -379,7 +475,7 @@ function laufPanel(aktien) {
   if ((deckung.fehlt || []).length) zeile("Indexquelle fehlgeschlagen", deckung.fehlt.join(", "));
   if (deckung.hinweis) zeile("Universum", deckung.hinweis);
   const hinweis = el("p", "ruhig");
-  text(hinweis, "Ein frischer Kurs ist keine abgeschlossene Messung. Die Messung umfasst Kurs, Technik, Nachrichten, Modell, Fundamentaldaten und Muster in einem Durchgang. Ein einzelner Schritt wird nicht als erledigt gezeigt.");
+  text(hinweis, "Vollständig heißt: Kurs, Historie, Technik, Fundamentaldaten, Nachrichten, Modell, Muster und Auswertung sind in diesem Durchgang als ok gespeichert. Ein frischer Kurs allein reicht nicht. Fehlende Schritte bleiben teilweise. Nachrichtenstimmung und eine eigene Risikoanalyse je Titel werden nicht als erledigt gezeigt.");
   panel.append(titel, zeilen, hinweis);
   return panel;
 }
@@ -401,14 +497,15 @@ function dashboard() {
   const reihe = el("div", "kpi-reihe");
   reihe.append(kpi("Erfasste Aktien", String(aktien.length || (standJetzt.abdeckung && standJetzt.abdeckung.symbole) || LEER), "aktien"));
   reihe.append(kpi("Kurs aktuell", String(kursAktuell), "aktien"));
-  reihe.append(kpi("Messung fertig", String(messung), "aktien"));
+  reihe.append(kpi("Vollständig", String(messung), "aktien"));
   reihe.append(kpi("Chancen", chancen ? String(chancen) : "0", "aktien"));
   reihe.append(kpi("Aktive Trader", haendler().aktiv == null ? LEER : String(haendler().aktiv), "trader"));
   reihe.append(kpi("Paper-Performance", zentrale().rendite || LEER, "performance"));
   block.append(reihe, laufPanel(aktien));
   const hinweis = el("p", "ruhig");
-  text(hinweis, chancen ? "" : "Validierte Chancen: " + LEER + ".");
-  block.append(hinweis);
+  const zaehl = function (code) { return aktien.filter(function (zeile) { return zeile.analyse === code; }).length; };
+  text(hinweis, "Vollständig " + zaehl("abgeschlossen") + ", teilweise " + zaehl("teilweise") + ", fehlgeschlagen " + zaehl("fehlgeschlagen") + ". Ein Kurs ist keine vollständige Analyse. Validierte Chancen: " + (chancen ? String(chancen) : LEER) + ".");
+  block.append(hinweis, lueckenSatz(), ereignisListe((standJetzt && standJetzt.ereignisse) || [], 3));
   block.append(diagramm("Gesamtperformance", zentrale().gesamt, zentrale().hinweis));
   const raster = el("div", "raster");
   const bewegung = aktien.filter(function (zeile) { return zeile.lage === "analysiert" && zahl(zeile.tag_wert); })
@@ -429,7 +526,9 @@ function dashboard() {
   text(satz, (bericht.phasen && bericht.phasen.phase) ? ("Marktphase " + bericht.phasen.phase) : "Marktphase nicht gemessen");
   const gewicht = el("p", "ruhig");
   text(gewicht, Object.keys(bericht.gewichte || {}).length ? "Gewichtung aus bestandener Prüfung." : "Keine Gewichtung. " + LEER + ".");
-  meta.append(kopf, satz, gewicht);
+  const lernzeile = el("p", "ruhig");
+  text(lernzeile, (standJetzt.lernen && standJetzt.lernen.horizonte) || "Kein Horizont ist freigegeben.");
+  meta.append(kopf, satz, gewicht, lernzeile);
   meta.addEventListener("click", function () { seite = "meta"; detail = null; zeichnen(standJetzt); });
   block.append(meta);
   return block;
@@ -446,8 +545,10 @@ function filterLeiste() {
   }
   ["Alle", "USA", "Deutschland", "Europa", "ETFs"].forEach(function (name) { knopf("bereich", name, name); });
   knopf("analyse", "alle", "Alle Zustände");
-  knopf("analyse", "abgeschlossen", "Analysiert");
-  knopf("analyse", "ausstehend", "Ausstehend");
+  knopf("analyse", "abgeschlossen", "Vollständig");
+  knopf("analyse", "teilweise", "Teilweise");
+  knopf("analyse", "nicht_gestartet", "Nicht gestartet");
+  knopf("analyse", "wartet", "Wartet auf Daten");
   knopf("analyse", "veraltet", "Veraltet");
   knopf("analyse", "fehlgeschlagen", "Fehlgeschlagen");
   knopf("richtung", "alle", "Beide Richtungen");
@@ -674,7 +775,7 @@ function aktienDetail(zeile) {
   }
   const quelle = el("p", "ruhig");
   text(quelle, zeile.herkunft || "Quelle fehlt");
-  panel.append(quelle);
+  panel.append(quelle, schrittListe(zeile));
   const meldungen = [];
   ["tag", "woche", "monate"].forEach(function (key) {
     const blockNews = standJetzt.nachrichten && standJetzt.nachrichten[key];
@@ -682,6 +783,10 @@ function aktienDetail(zeile) {
       if (meldung.symbol === zeile.symbol) meldungen.push(meldung);
     });
   });
+  block.append(faktorenListe(zeile));
+  block.append(ereignisListe(((standJetzt && standJetzt.ereignisse) || []).filter(function (eintrag) {
+    return eintrag.symbol === zeile.symbol;
+  }), 4));
   if (meldungen.length) {
     const news = el("details");
     const summary = el("summary");
@@ -744,8 +849,21 @@ function traderDetail(zeile) {
 function detailBlick() {
   if (!detail) return dashboard();
   if (detail.art === "aktie") {
-    const zeile = bestand().find(function (eintrag) { return eintrag.symbol === detail.id; });
-    if (!zeile) { detail = null; return dashboard(); }
+    let zeile = bestand().find(function (eintrag) { return eintrag.symbol === detail.id; });
+    if (!zeile) {
+      zeile = {
+        symbol: detail.id,
+        name: detail.name || detail.id,
+        bereich: detail.bereich || "",
+        lage: "",
+        analyse: "nicht_gestartet",
+        preis: null,
+        tag_wert: null,
+        liste: false,
+        herkunft: "",
+        schritte: {}
+      };
+    }
     return aktienDetail(zeile);
   }
   const zeile = (haendler().rangliste || []).find(function (eintrag) { return eintrag.name === detail.id; });
@@ -792,6 +910,7 @@ function zeichnen(stand) {
 }
 
 let ladenLaeuft = false;
+let suchLauf = 0;
 
 async function laden() {
   if (ladenLaeuft) return;
@@ -818,11 +937,14 @@ async function laden() {
 
 function suchfeld() { return document.getElementById("treffer"); }
 
-function oeffneSymbol(symbol) {
-  if (!bestand().some(function (eintrag) { return eintrag.symbol === symbol; })) merkeLokal(symbol, symbol, "");
+function sucheNochAktuell(lauf, aktuell, textWert, feldWert) {
+  return lauf === aktuell && textWert === feldWert;
+}
+
+function oeffneSymbol(symbol, name, bereich) {
   const zeile = bestand().find(function (eintrag) { return eintrag.symbol === symbol; });
   seite = zeile && zeile.bereich === "Krypto" ? "crypto" : "aktien";
-  detail = { art: "aktie", id: symbol };
+  detail = { art: "aktie", id: symbol, name: name || "", bereich: bereich || "" };
   suchfeld().className = "";
   suchfeld().replaceChildren();
   if (standJetzt) zeichnen(standJetzt);
@@ -834,7 +956,7 @@ function merkeLokal(symbol, name, bereich) {
   if (bestand().some(function (zeile) { return zeile.symbol === symbol; })) return;
   standJetzt.bestand.zeilen.push({
     symbol: symbol, name: name || symbol, bereich: bereich || "", lage: "ausstehend",
-    analyse: "ausstehend", preis: null, tag_wert: null, liste: true, reihe: null
+    analyse: "nicht_gestartet", preis: null, tag_wert: null, liste: true, reihe: null, schritte: {}
   });
 }
 
@@ -862,7 +984,7 @@ function suchzeile(symbol, name, markt, kurs, analyse, dabei) {
   const oeffnen = el("button");
   oeffnen.type = "button";
   text(oeffnen, "Öffnen");
-  oeffnen.addEventListener("click", function () { oeffneSymbol(symbol); });
+  oeffnen.addEventListener("click", function () { oeffneSymbol(symbol, name, markt); });
   const hinzu = el("button");
   hinzu.type = "button";
   text(hinzu, dabei ? "Auf der Liste" : "Zur Watchlist");
@@ -892,17 +1014,19 @@ function suchliste() {
   }
 }
 
-async function sucheAussen(textWert) {
-  if (document.getElementById("suche").value.trim() !== textWert) return;
+async function sucheAussen(textWert, lauf) {
+  if (!sucheNochAktuell(lauf, suchLauf, textWert, document.getElementById("suche").value.trim())) return;
   try {
     const antwort = await fetch("/suche?q=" + encodeURIComponent(textWert));
     const daten = await antwort.json();
+    if (!sucheNochAktuell(lauf, suchLauf, textWert, document.getElementById("suche").value.trim())) return;
     if (!antwort.ok) {
       const hinweis = el("p", "leer");
       text(hinweis, daten.meldung || "Suche nicht erreichbar");
       suchfeld().append(hinweis);
       return;
     }
+    suchfeld().querySelectorAll("p.leer").forEach(function (knoten) { knoten.remove(); });
     const bekannt = new Set(lokaleTreffer(bestand(), textWert).map(function (zeile) { return zeile.symbol; }));
     (daten.treffer || []).forEach(function (eintrag) {
       if (bekannt.has(eintrag.symbol)) return;
@@ -912,7 +1036,7 @@ async function sucheAussen(textWert) {
         eintrag.name,
         eintrag.boerse || eintrag.typ || "",
         lokal ? lokal.lage : "nicht im Bestand",
-        lokal ? lokal.analyse : "ausstehend",
+        lokal ? lokal.analyse : "nicht_gestartet",
         !!(lokal && lokal.liste)
       ));
     });
@@ -922,6 +1046,7 @@ async function sucheAussen(textWert) {
       suchfeld().append(hinweis);
     }
   } catch (fehler) {
+    if (!sucheNochAktuell(lauf, suchLauf, textWert, document.getElementById("suche").value.trim())) return;
     const hinweis = el("p", "leer");
     text(hinweis, "Backend nicht erreichbar");
     suchfeld().append(hinweis);
@@ -929,16 +1054,20 @@ async function sucheAussen(textWert) {
 }
 
 document.getElementById("suche").addEventListener("input", function () {
+  suchLauf += 1;
+  const lauf = suchLauf;
   suchliste();
   clearTimeout(suchTimer);
   const textWert = this.value.trim();
   if (textWert.length < 2) return;
-  suchTimer = setTimeout(function () { sucheAussen(textWert); }, 350);
+  suchTimer = setTimeout(function () { sucheAussen(textWert, lauf); }, 350);
 });
 document.getElementById("finden").addEventListener("click", function () {
+  suchLauf += 1;
+  const lauf = suchLauf;
   const textWert = document.getElementById("suche").value.trim();
   suchliste();
-  if (textWert.length >= 2) sucheAussen(textWert);
+  if (textWert.length >= 2) sucheAussen(textWert, lauf);
 });
 document.getElementById("neu").addEventListener("click", async function () {
   this.disabled = true;

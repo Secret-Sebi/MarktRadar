@@ -260,15 +260,39 @@ class UniversumTests(unittest.TestCase):
             bild = bestand(pfad, ("SAP.DE", "AMD", "SIE.DE", "MSFT"), jetzt)
         lagen = {zeile["symbol"]: zeile["lage"] for zeile in bild["zeilen"]}
         self.assertEqual(lagen["SAP.DE"], "analysiert")
-        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SAP.DE")["analyse"], "abgeschlossen")
+        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SAP.DE")["analyse"], "teilweise")
         self.assertEqual(lagen["AMD"], "veraltet")
         self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "AMD")["analyse"], "veraltet")
         self.assertEqual(lagen["MSFT"], "analysiert")
-        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "MSFT")["analyse"], "ausstehend")
+        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "MSFT")["analyse"], "wartet")
         self.assertEqual(lagen["SIE.DE"], "ausstehend")
-        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SIE.DE")["analyse"], "ausstehend")
+        self.assertEqual(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SIE.DE")["analyse"], "nicht_gestartet")
         self.assertIsNone(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SIE.DE")["preis"])
         self.assertIsNone(next(zeile for zeile in bild["zeilen"] if zeile["symbol"] == "SAP.DE")["aufwaerts"])
+
+    def test_analysecode_verlangt_alle_gespeicherten_schritte(self):
+        from auswertung import analyse_code
+
+        ok = {
+            name: {"stand": "ok"}
+            for name in ("kurs", "historie", "technik", "fundamental", "nachrichten", "modell", "muster", "auswertung")
+        }
+        self.assertEqual(analyse_code("analysiert", ok, True, "ok", ""), "abgeschlossen")
+        luecke = dict(ok)
+        luecke["fundamental"] = {"stand": "fehlt"}
+        self.assertEqual(analyse_code("analysiert", luecke, True, "ok", ""), "teilweise")
+        leer = dict(ok)
+        leer["fundamental"] = {"stand": "nicht_verfuegbar"}
+        self.assertEqual(analyse_code("analysiert", leer, True, "ok", ""), "abgeschlossen")
+        kaputt = dict(ok)
+        kaputt["fundamental"] = {"stand": "fehler"}
+        self.assertEqual(analyse_code("analysiert", kaputt, True, "ok", ""), "teilweise")
+        news = dict(ok)
+        news["nachrichten"] = {"stand": "fehler"}
+        self.assertEqual(analyse_code("analysiert", news, True, "ok", ""), "teilweise")
+        self.assertEqual(analyse_code("analysiert", {"kurs": {"stand": "fehler"}}, False, "", None), "fehlgeschlagen")
+        self.assertEqual(analyse_code("analysiert", "", True, "ok", ""), "teilweise")
+        self.assertEqual(analyse_code("analysiert", "", True, "ok", None), "wartet")
 
     def _verboten(self, *args, **kwargs):
         raise AssertionError("Netz")

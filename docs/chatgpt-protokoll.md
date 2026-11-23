@@ -8,11 +8,9 @@ Diese Datei: https://github.com/Secret-Sebi/MarktRadar/blob/main/docs/chatgpt-pr
 
 ## Lies zuerst diese Grenze
 
-Dieser Commit enthält nur dieses Dokument. Die Programmänderungen seit `0aa3ddf` sind auf dem Mac lokal und nicht in diesem Commit. Auf GitHub gibt es deshalb unter anderem noch nicht:
+Dieser Commit veröffentlicht den lokalen Analysestand seit `0aa3ddf`, nicht nur dieses Dokument. Dazu gehören unter anderem `nachrichten_analyse.py`, `einfluss.py`, `ki_pruefung.py` und die zugehörigen Tests. `watchlist.txt` und die Datenbank bleiben draußen. Eine Datei, die in dem Commit fehlt, ist nicht veröffentlicht.
 
-`nachrichten_analyse.py`, `einfluss.py`, `ki_pruefung.py`, `test_nachrichten_analyse.py`, `test_umsetzung.py`, `test_einfluss.py`
-
-Wenn eine Datei auf GitHub fehlt, ist die Funktion dort nicht veröffentlicht. Beschreibe sie dann als lokalen, nicht überprüfbaren Stand, nicht als laufenden GitHub-Code. Vermische die beiden Stände nicht.
+Leere `analyse`-Felder werden beim Öffnen des Fensters nachträglich gefüllt. Das JSON trägt `nachtraeglich` und `analysiert_um`. `zeit`, `wirkung_*` und `ki_genutzt` bleiben unverändert. Der Zuordnungstext wird nur aus schon gespeicherten Bewegungen geschrieben. Das ist keine damals bekannte Prognose und keine Ursache.
 
 Die Datenbank `daten/markt.sqlite` liegt nicht auf GitHub. Die Zahlen unten sind eine Abfrage auf dem Mac am Montag, 23. November 2026, etwa 17:34 Uhr Berlin. Sie sind eine Momentaufnahme, keine Endbilanz. Die Messrunde kann danach weitergeschrieben haben.
 
@@ -36,7 +34,7 @@ Fundamentalstände in diesen 98 Zeilen: 29 `ok`, 57 `fehlt`, 4 `nicht_verfuegbar
 
 Nachrichtenstände in diesen 98 Zeilen: 57 `ok`, 35 `fehler`, 6 ohne Stand. 35 Fehler sind Quellenausfälle, kein stilles Gelingen.
 
-Nachrichten gesamt: 3.795. Davon `wirkung_1` gesetzt: 2.482. Gespeicherte `analyse`: 0. Gespeicherte `zuordnung`: 0. Die Ereignissprache wird lokal beim Anzeigen aus der Überschrift berechnet und nicht als damalige Prognose in die Datenbank geschrieben. Alte Zeilen sind dadurch nicht nachträglich als rechtzeitig analysiert gespeichert.
+Nachrichten gesamt: 3.795. Davon `wirkung_1` gesetzt: 2.482. `ki_genutzt = 1` bleibt 2.482. Nach dem Nachtrag am 23. November 2026, etwa 17:45 Uhr, haben 3.795 Zeilen ein `analyse`-JSON mit `nachtraeglich` und 2.482 einen Zuordnungstext aus der gespeicherten Bewegung. Das ist keine damals bekannte Prognose.
 
 `ki_modell.beispiele`: 1.556. Das ist das alte gemischte Modell. Die lokale Änderung trainiert es nicht weiter. Auf GitHub kann der alte Pfad noch sichtbar sein. Die Lücke zwischen 1.556 Beispielen und 2.482 `ki_genutzt = 1` ist nicht umetikettiert. Eine Markierung ist kein Nachweis, dass trainiert wurde.
 
@@ -55,7 +53,7 @@ Lokale Tests: `python3 -m unittest discover`, 199 Tests, alle bestanden, nach de
 1. Die Analyse deckt das Universum nicht ab. 627 Zeilen haben einen Preis, nur 3 gespeicherte Messungen sind vollständig.
 2. Fundamentaldaten fehlen in den meisten gespeicherten Schrittprotokollen. Eine Yahoo-Antwort ohne Krume war HTTP 401. Ob der Krume-Pfad auf GitHub schon liegt, siehst du nur im veröffentlichten `fundamental.py`.
 3. Nachrichten sind Schlagzeilen von Yahoo und GDELT, kein Volltext, kein Sprachmodell. Die Stärke von -100 bis 100 ist eine Schlüsselwort-Einordnung, keine Wahrscheinlichkeit. `validiert` bleibt falsch.
-4. Es gibt keine gespeicherte Ereignisanalyse und keine gespeicherte Ursachen-Zuordnung. 2.482 Ein-Tages-Bewegungen sind gemessen, aber nicht als Ursache belegt.
+4. Die gespeicherte Ereignisanalyse der alten Zeilen ist nachträglich. 2.482 Ein-Tages-Bewegungen sind gemessen, aber nicht als Ursache belegt.
 5. Eine konkrete NVDA-Zeile vom 17. November 2026, 20:26 Uhr UTC, trägt eine Yahoo-Überschrift über erwartete Quartalszahlen und Colette Kress als interimistische Gastgeberin. `wirkung_1` ist etwa -3,30 Prozent. `wirkung_5` und der Indexvergleich fehlen. Daraus folgt keine Ursache. Andere NVIDIA-Überschriften in der Datenbank sind unbestätigt und dürfen nicht als Personalentscheidung über Jensen Huang ausgegeben werden.
 6. Dieselbe Ereignisart am selben Tag soll nicht doppelt zählen. Zehn Artikel über dasselbe Ereignis sind damit nicht als ein geprüftes Ereignis-Cluster nachgewiesen, nur als Regel auf dem Schlüssel.
 7. Verspätete Meldungen, mehr als sechs Stunden nach `zeit`, dürfen lokal nicht als damals bekannt gelten. Das ist eine Regel, keine gemessene Marktstudie.

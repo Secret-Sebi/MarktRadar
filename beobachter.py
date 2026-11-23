@@ -50,9 +50,24 @@ from analyse import (
     urteilen,
 )
 from database import signal_speichern
-from ki import aktion_aus_ki, ki_satz, messe, schaetzung, trainiere
+from ki import (
+    aktion_aus_ki,
+    freigegeben,
+    ki_satz,
+    messe,
+    modell_fuer_anzeige,
+    schaetzung,
+    trainiere,
+)
 from kurse import gueltiges_symbol, hole_kurs
-from lernen import aktion_aus_lernen, aktion_aus_verkauf, aktualisiere, folge_satz, satz
+from lernen import (
+    abruf_stand,
+    aktion_aus_lernen,
+    aktion_aus_verkauf,
+    aktualisiere,
+    folge_satz,
+    satz,
+)
 from technik import berechne, vergleichsindex
 
 ORDNER = Path(__file__).resolve().parent
@@ -146,6 +161,8 @@ class Zeile:
     aufwaerts: float | None = None
     fenster_faelle: int = 0
     muster: dict | None = None
+    schritte: str = ""
+    news_bild: dict | None = None
 
 
 def main(argv: Sequence[str], ausgabe: TextIO = sys.stdout) -> int:
@@ -256,9 +273,9 @@ def lauf(
         schlaf(naechste)
 
 
-def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinweis=None, bei_zeile=None):
+def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinweis=None, bei_zeile=None, bei_start=None):
     moment = uhr(BERLIN)
-    zeilen = sammle(symbole, bei_zeile=bei_zeile)
+    zeilen = sammle(symbole, bei_zeile=bei_zeile, bei_start=bei_start)
     naechste = warte_sekunden(moment, sekunden)
     zustand, meldungen = zustand_nach_runde(zustand, zeilen, moment.isoformat(timespec="minutes"))
     speichere_zustand(ZUSTAND, zustand)
@@ -367,7 +384,7 @@ def zustand_nach_runde(alt: dict, zeilen: Sequence[Zeile], zeit: str):
     return {"symbole": neu}, tuple(meldungen)
 
 
-def sammle(symbole: Sequence[str], bei_zeile=None) -> tuple[Zeile, ...]:
+def sammle(symbole: Sequence[str], bei_zeile=None, bei_start=None) -> tuple[Zeile, ...]:
     fx: dict = {}
     if not symbole:
         return ()
@@ -382,7 +399,10 @@ def sammle(symbole: Sequence[str], bei_zeile=None) -> tuple[Zeile, ...]:
             ergebnis = fertig.result()
             if art == "index":
                 fertige_indizes[symbol] = None if isinstance(ergebnis, Exception) else ergebnis
+                index_sichern(DATENBANK, fertige_indizes[symbol])
                 continue
+            if bei_start is not None:
+                bei_start(symbol)
             zeilen = zeilen + (bewerte(symbol, fertige_indizes.get(vergleichsindex(symbol)), fx, ergebnis),)
             if bei_zeile is not None:
                 bei_zeile(zeilen)
@@ -420,6 +440,8 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
     lern_satz = ""
     thema = "unklar"
     befund = None
+    nachrichten_stand = "fehlt"
+    modell_stand = "fehlt"
     try:
         index_balken = None if markt is None else getattr(markt, "balken", None)
         befund = aktualisiere(
@@ -432,6 +454,7 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         )
         lern_satz = satz(befund)
         thema = befund.kategorie
+        nachrichten_stand = _nachrichten_stand(abruf_stand(DATENBANK, daten.symbol or symbol))
         if aktion_aus_lernen(urteil.aktion, befund.anzahl, befund.median) != urteil.aktion:
             urteil = Urteil(
                 "abwarten",
@@ -444,12 +467,16 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
                 "Die bisherigen Fälle sprechen gegen einen Einstieg. Die Beobachtung läuft weiter.",
             )
     except (OSError, sqlite3.Error):
+        nachrichten_stand = "fehler"
         lern_satz = "Die bisherigen Nachrichten konnten nicht gespeichert werden."
     try:
         modell = trainiere(DATENBANK, daten.symbol or symbol, daten.balken)
-        chance = schaetzung(modell, daten.balken, thema)
+        geprueft = freigegeben(DATENBANK, 1)
+        anzeige = modell_fuer_anzeige(DATENBANK, 1)
+        chance = None if anzeige is None else schaetzung(anzeige, daten.balken, thema)
+        modell_stand = "ok"
         pruefung = messe(DATENBANK, daten.symbol or symbol, daten.balken)
-        lern_satz = f"{lern_satz} {ki_satz(modell, chance, pruefung)}".strip()
+        lern_satz = f"{lern_satz} {ki_satz(modell, chance, pruefung, geprueft)}".strip()
         neue_aktion = aktion_aus_ki(
             urteil.aktion, modell, chance, (daten.datenstatus or "ok") == "ok", pruefung
         )
@@ -466,7 +493,8 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
                 "Das Modell spricht gegen einen Einstieg. Die Beobachtung läuft weiter.",
             )
     except (OSError, sqlite3.Error):
-        pass
+        modell_stand = "fehler"
+        lern_satz = f"{lern_satz} Das Modell konnte nicht gerechnet werden.".strip()
     if befund is not None and aktion_aus_verkauf(
         urteil.aktion, befund.eigene, befund.eigene_median, (daten.datenstatus or "ok") == "ok"
     ) == "verkauf_pruefen":
@@ -483,17 +511,25 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
     try:
         from urllib.request import urlopen
 
-        from fundamental import hole as hole_fundamental
+        from fundamental import hole_lage
 
-        fundamental = hole_fundamental(daten.symbol or symbol, urlopen)
+        lage = hole_lage(daten.symbol or symbol, urlopen)
+        fundamental = lage.text
+        fundamental_stand = lage.stand
+        fundamental_grund = lage.grund
+        fundamental_quelle = lage.quelle
     except (OSError, ValueError):
         fundamental = "fehlt"
+        fundamental_stand = "fehler"
+        fundamental_grund = "Fundamentaldaten konnten nicht gelesen werden."
+        fundamental_quelle = ""
     fenster_text, pruefung = ("", "")
     tag_text = ""
     markt_text = ""
     aufwaerts = None
     fenster_faelle = 0
     muster = None
+    muster_stand = "fehlt"
     if (daten.datenstatus or "ok") == "ok":
         from auswertung import index_an_tagen
         from muster import pruefen
@@ -506,6 +542,7 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
             except (OSError, sqlite3.Error):
                 index_reihe = None
         muster = pruefen(zahlen, daten.schluesse, index_reihe, bool(getattr(daten, "hat_bereinigt", False)))
+        muster_stand = "ok"
         if not muster["aktiv"]:
             fenster_text, fenster_grund = "", ""
         elif muster["rang"] is None:
@@ -550,6 +587,18 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
         aufwaerts=aufwaerts,
         fenster_faelle=fenster_faelle,
         muster=muster,
+        news_bild=_news_bild(daten.symbol or symbol),
+        schritte=_schritte_text(
+            daten,
+            technik,
+            fundamental,
+            nachrichten_stand,
+            modell_stand,
+            muster_stand,
+            fundamental_stand,
+            fundamental_grund,
+            fundamental_quelle,
+        ),
     )
 
 
@@ -645,8 +694,82 @@ def _kursreihe(werte, maximum: int = 80) -> tuple[float, ...]:
     )
 
 
+def _news_bild(symbol: str) -> dict | None:
+    from lernen import letzte_analyse
+
+    try:
+        bild = letzte_analyse(DATENBANK, symbol)
+    except (OSError, sqlite3.Error):
+        return None
+    return bild or None
+
+
+def index_sichern(pfad: Path, daten) -> int:
+    if daten is None or isinstance(daten, Exception):
+        return 0
+    from lernen import kurse_merken
+
+    try:
+        return kurse_merken(pfad, getattr(daten, "symbol", ""), getattr(daten, "balken", ()), bool(getattr(daten, "hat_bereinigt", False)))
+    except (OSError, sqlite3.Error):
+        return 0
+
+
+def _nachrichten_stand(stand: str) -> str:
+    if stand == "gespeichert":
+        return "ok"
+    if stand == "keine":
+        return "nicht_verfuegbar"
+    if stand == "fehlgeschlagen":
+        return "fehler"
+    return "fehlt"
+
+
+def _schritte_text(
+    daten,
+    technik,
+    fundamental: str,
+    nachrichten: str,
+    modell: str,
+    muster: str,
+    fundamental_stand: str | None = None,
+    fundamental_grund: str = "",
+    fundamental_quelle: str = "",
+) -> str:
+    del fundamental
+    jetzt = int(time.time())
+    kurs = "ok" if (daten.datenstatus or "") == "ok" and daten.preis is not None else "fehler"
+    historie = "ok" if getattr(technik, "vollstaendig", False) else "nicht_ausreichend"
+    technik_stand = "ok" if technik is not None else "fehlt"
+    if fundamental_stand is None:
+        fundamental_stand = "fehlt"
+    return json.dumps(
+        {
+            "zeit": jetzt,
+            "kurs": {"stand": kurs, "zeit": daten.kurszeit if isinstance(daten.kurszeit, int) else jetzt},
+            "historie": {"stand": historie, "zeit": jetzt},
+            "technik": {"stand": technik_stand, "zeit": jetzt},
+            "fundamental": {
+                "stand": fundamental_stand,
+                "zeit": jetzt,
+                "quelle": fundamental_quelle,
+                "grund": fundamental_grund,
+            },
+            "nachrichten": {"stand": nachrichten, "zeit": jetzt},
+            "modell": {"stand": modell, "zeit": jetzt},
+            "muster": {"stand": muster, "zeit": jetzt},
+            "auswertung": {"stand": "ok", "zeit": jetzt},
+        },
+        ensure_ascii=False,
+    )
+
+
 def _fehler(symbol: str, meldung: str) -> Zeile:
-    return Zeile(symbol, symbol, "", None, None, fehler_urteil(meldung), None)
+    roh = json.dumps(
+        {"zeit": int(time.time()), "kurs": {"stand": "fehler", "zeit": int(time.time()), "text": meldung[:180]}},
+        ensure_ascii=False,
+    )
+    return Zeile(symbol, symbol, "", None, None, fehler_urteil(meldung), None, schritte=roh)
 
 
 def _melde(meldungen: Sequence[Zeile], hinweis) -> None:

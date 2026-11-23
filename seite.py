@@ -123,6 +123,7 @@ def _karte(zeile) -> dict:
             ),
         ),
         "bereich": bereich(zeile),
+        "schritte": getattr(zeile, "schritte", "") or "",
         "kurszeit": _stempel(getattr(zeile, "kurszeit", None)),
         **potenzial(zeile),
     }

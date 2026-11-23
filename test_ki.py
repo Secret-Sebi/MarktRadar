@@ -1,5 +1,6 @@
 """Das Modell ändert seine Gewichte nur an abgeschlossenen Fällen."""
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +67,14 @@ class ModellTests(unittest.TestCase):
             nachtragen(pfad, "SAP.DE", balken)
             dritter = trainiere(pfad, "SAP.DE", balken)
             self.assertEqual(dritter.beispiele, erster.beispiele)
+            self.assertEqual(lies_modell(pfad).beispiele, 0)
+            with sqlite3.connect(pfad) as verbindung:
+                status = [zeile[0] for zeile in verbindung.execute(
+                    "SELECT status FROM ki_beispiel WHERE horizont = 1 ORDER BY nachricht_id"
+                )]
+            self.assertEqual(status[0], "trainiert")
+            self.assertTrue(status[1:])
+            self.assertTrue(all(wert == "ausgeschlossen" for wert in status[1:]))
 
     def test_modell_entscheidet_selbst_und_lernt_den_ausgang_einmal(self):
         balken = _kursreihe(10, 30)

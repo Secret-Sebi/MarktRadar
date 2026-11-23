@@ -175,6 +175,20 @@ def soll_holen(letzter: int | None, jetzt: int, pause: int = 1800) -> bool:
     return jetzt - letzter >= pause
 
 
+def abruf_stand(pfad: Path, symbol: str) -> str:
+    if not pfad.exists():
+        return "offen"
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeile = verbindung.execute(
+            "SELECT stand FROM abruf WHERE symbol = ? AND art = ?",
+            (symbol, _NEWS_ART),
+        ).fetchone()
+    if zeile is None or not zeile[0]:
+        return "offen"
+    return str(zeile[0])
+
+
 def wirkung(balken, zeitpunkt: int, abstand: int) -> float | None:
     if abstand < 1:
         return None
@@ -193,7 +207,7 @@ def _barpreis(bar) -> float:
     return 0.0 if not schluss else float(schluss)
 
 
-def speichern(pfad: Path, symbol: str, meldungen: tuple[Meldung, ...]) -> int:
+def speichern(pfad: Path, symbol: str, meldungen: tuple[Meldung, ...], name: str = "") -> int:
     neu = 0
     pfad.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(pfad) as verbindung:
@@ -207,12 +221,38 @@ def speichern(pfad: Path, symbol: str, meldungen: tuple[Meldung, ...]) -> int:
             if schluessel in bekannt:
                 continue
             art, ton, hinweis = einordnung(meldung.titel, meldung.quelle)
+            from nachrichten_analyse import analysiere, schluessel
+
+            erfasst = int(time.time())
+            ereignis_name = "sonstiges"
+            bild = analysiere(meldung.titel, meldung.quelle, symbol, name, meldung.zeit, erfasst, False)
+            ereignis_name = schluessel(symbol, str(bild["ereignis"]), meldung.titel)
+            schon = verbindung.execute(
+                "SELECT 1 FROM nachrichten WHERE symbol = ? AND ereignis = ? AND zeit / 86400 = ?",
+                (symbol, ereignis_name, int(meldung.zeit) // 86400),
+            ).fetchone()
+            if schon is not None:
+                bild = analysiere(meldung.titel, meldung.quelle, symbol, name, meldung.zeit, erfasst, True)
             cursor = verbindung.execute(
                 """
-                INSERT OR IGNORE INTO nachrichten (url, symbol, zeit, titel, quelle, kategorie, art, ton, quellenhinweis)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO nachrichten
+                (url, symbol, zeit, titel, quelle, kategorie, art, ton, quellenhinweis, erfasst, analyse, ereignis)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (meldung.url, symbol, meldung.zeit, meldung.titel, meldung.quelle, meldung.kategorie, art, ton, hinweis),
+                (
+                    meldung.url,
+                    symbol,
+                    meldung.zeit,
+                    meldung.titel,
+                    meldung.quelle,
+                    meldung.kategorie,
+                    art,
+                    ton,
+                    hinweis,
+                    erfasst,
+                    json.dumps(bild, ensure_ascii=False),
+                    ereignis_name,
+                ),
             )
             neu += cursor.rowcount
             if cursor.rowcount:
@@ -253,10 +293,175 @@ def nachtragen(pfad: Path, symbol: str, balken, index_balken=None) -> int:
                 index_5 = wirkung(index_balken, int(zeit), 5) if index_balken else None
                 teile.append("rel_5 = ?")
                 werte.append(gegen_index(neu[5], index_5))
+            else:
+                index_5 = None
+            if 1 in neu or 5 in neu:
+                from nachrichten_analyse import zuordnung
+
+                aktie = neu.get(1, neu.get(5))
+                index_wert = wirkung(index_balken, int(zeit), 1) if 1 in neu and index_balken else index_5
+                weitere = verbindung.execute(
+                    """
+                    SELECT COUNT(*) FROM nachrichten
+                    WHERE symbol = ? AND id != ? AND zeit / 86400 = ?
+                    """,
+                    (symbol, nummer, int(zeit) // 86400),
+                ).fetchone()[0]
+                teile.append("zuordnung = ?")
+                werte.append(zuordnung(aktie, index_wert, int(weitere or 0)))
             werte.append(nummer)
             verbindung.execute(f"UPDATE nachrichten SET {', '.join(teile)} WHERE id = ?", werte)
             geaendert += 1
     return geaendert
+
+
+def analysen_nachholen(pfad: Path) -> int:
+    """Füllt nur leere Analysefelder. Die Einordnung gilt ab jetzt, nicht ab der Veröffentlichung."""
+    if not pfad.exists():
+        return 0
+    from nachrichten_analyse import analysiere, schluessel
+
+    jetzt = int(time.time())
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeilen = verbindung.execute(
+            """
+            SELECT id, symbol, titel, quelle, zeit
+            FROM nachrichten
+            WHERE analyse IS NULL OR analyse = ''
+            """
+        ).fetchall()
+        geschrieben = 0
+        for nummer, symbol, titel, quelle, zeit in zeilen:
+            bild = analysiere(str(titel or ""), str(quelle or ""), str(symbol or ""), "", int(zeit or 0), jetzt, False)
+            bild["nachtraeglich"] = True
+            bild["analysiert_um"] = jetzt
+            verbindung.execute(
+                """
+                UPDATE nachrichten
+                SET analyse = ?, ereignis = ?
+                WHERE id = ? AND (analyse IS NULL OR analyse = '')
+                """,
+                (
+                    json.dumps(bild, ensure_ascii=False),
+                    schluessel(str(symbol or ""), str(bild.get("ereignis") or "sonstiges"), str(titel or "")),
+                    nummer,
+                ),
+            )
+            geschrieben += 1
+    return geschrieben
+
+
+def zuordnungen_nachholen(pfad: Path) -> int:
+    """Schreibt den Zuordnungstext nur aus schon gespeicherten Kursbewegungen."""
+    if not pfad.exists():
+        return 0
+    from nachrichten_analyse import zuordnung
+
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeilen = verbindung.execute(
+            """
+            SELECT id, symbol, zeit, wirkung_1, wirkung_5, rel_5
+            FROM nachrichten
+            WHERE (zuordnung IS NULL OR zuordnung = '')
+              AND (wirkung_1 IS NOT NULL OR wirkung_5 IS NOT NULL)
+            """
+        ).fetchall()
+        geschrieben = 0
+        for nummer, symbol, zeit, wirkung_1, wirkung_5, rel_5 in zeilen:
+            aktie = wirkung_1 if wirkung_1 is not None else wirkung_5
+            index = None if rel_5 is None or wirkung_5 is None else float(wirkung_5) - float(rel_5)
+            weitere = verbindung.execute(
+                """
+                SELECT COUNT(*) FROM nachrichten
+                WHERE symbol = ? AND id != ? AND zeit / 86400 = ?
+                """,
+                (symbol, nummer, int(zeit or 0) // 86400),
+            ).fetchone()[0]
+            verbindung.execute(
+                "UPDATE nachrichten SET zuordnung = ? WHERE id = ? AND (zuordnung IS NULL OR zuordnung = '')",
+                (zuordnung(None if aktie is None else float(aktie), index, int(weitere or 0)), nummer),
+            )
+            geschrieben += 1
+    return geschrieben
+
+
+def letzte_analyse(pfad: Path, symbol: str) -> dict:
+    if not pfad.exists():
+        return {}
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeile = verbindung.execute(
+            """
+            SELECT analyse, zuordnung, titel, zeit, quelle
+            FROM nachrichten
+            WHERE symbol = ? AND analyse IS NOT NULL
+            ORDER BY zeit DESC LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
+    if zeile is None or not zeile[0]:
+        return {}
+    try:
+        bild = json.loads(zeile[0])
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(bild, dict):
+        return {}
+    bild["zuordnung"] = zeile[1] or "Kursreaktion noch nicht messbar"
+    bild["titel"] = zeile[2]
+    bild["zeit"] = zeile[3]
+    bild["quelle"] = zeile[4]
+    return bild
+
+
+def ereignisse(pfad: Path, grenze: int = 8) -> tuple[dict, ...]:
+    if not pfad.exists():
+        return ()
+    with sqlite3.connect(pfad) as verbindung:
+        _tabelle(verbindung)
+        zeilen = verbindung.execute(
+            """
+            SELECT symbol, titel, quelle, zeit, analyse, zuordnung, wirkung_1, wirkung_5, rel_5
+            FROM nachrichten
+            ORDER BY zeit DESC LIMIT ?
+            """,
+            (grenze,),
+        ).fetchall()
+    bilder = []
+    from nachrichten_analyse import analysiere
+
+    for symbol, titel, quelle, zeit, analyse, text, wirkung_1, wirkung_5, rel_5 in zeilen:
+        bild = None
+        if analyse:
+            try:
+                bild = json.loads(analyse)
+            except json.JSONDecodeError:
+                bild = None
+        if not isinstance(bild, dict):
+            bild = analysiere(str(titel or ""), str(quelle or ""), str(symbol or ""), "", int(zeit or 0), int(time.time()))
+            bild["nachtraeglich"] = True
+        if not text:
+            from nachrichten_analyse import zuordnung
+
+            aktie = wirkung_1 if wirkung_1 is not None else wirkung_5
+            index = None if rel_5 is None or wirkung_5 is None else float(wirkung_5) - float(rel_5)
+            text = zuordnung(None if aktie is None else float(aktie), index)
+        bilder.append(
+            {
+                "symbol": symbol,
+                "titel": titel,
+                "quelle": quelle,
+                "zeit": zeit,
+                "ereignis": bild.get("ereignis"),
+                "stimmung": bild.get("stimmung"),
+                "staerke": bild.get("staerke"),
+                "zuordnung": text or "Kursreaktion noch nicht messbar",
+                "validiert": False,
+            }
+        )
+    return tuple(bilder)
 
 
 def statistik(pfad: Path, symbol: str) -> Befund:
@@ -307,7 +512,9 @@ def aktion_aus_verkauf(aktion: str, eigene: int, median: float | None, daten_ok:
 
 def fortschritt(pfad: Path) -> dict:
     if not pfad.exists():
-        return _lernstand(0, 0, 0, 0, 0, 0)
+        stand = _lernstand(0, 0, 0, 0, 0, 0)
+        stand.update(trainiert=0, ausgeschlossen=0, trainingsfehler=0, freigegeben=[], horizonte="Kein Horizont ist freigegeben.")
+        return stand
     with sqlite3.connect(pfad) as verbindung:
         _tabelle(verbindung)
         abgeschlossen = _anzahl(verbindung, True)
@@ -316,7 +523,22 @@ def fortschritt(pfad: Path) -> dict:
         schwelle = len(_namen_ab(verbindung, _MINDEST, False))
         testbar = len(_namen_ab(verbindung, 61, True))
         modell = _modell_faelle(verbindung)
-    return _lernstand(abgeschlossen, offen, namen, schwelle, testbar, modell)
+    stand = _lernstand(abgeschlossen, offen, namen, schwelle, testbar, modell)
+    from ki import nachweis
+
+    bild = nachweis(pfad)
+    stand["trainiert"] = bild["trainiert"]
+    stand["ausgeschlossen"] = bild["ausgeschlossen"]
+    stand["trainingsfehler"] = bild["fehler"]
+    stand["freigegeben"] = bild["freigegeben"]
+    if bild["freigegeben"]:
+        stand["horizonte"] = "Freigegebene Horizonte: " + ", ".join(str(wert) for wert in bild["freigegeben"]) + "."
+    else:
+        stand["horizonte"] = (
+            f"Trainiert {bild['trainiert']}, ausgeschlossen {bild['ausgeschlossen']}, "
+            f"Fehler {bild['fehler']}. Kein Horizont ist freigegeben."
+        )
+    return stand
 
 
 def einfluss(
@@ -457,7 +679,7 @@ def kurse_merken(pfad: Path, symbol: str, balken, hat_bereinigt: bool = False) -
 
 def _holen(pfad: Path, symbol: str, name: str, oeffnen, jetzt: int | None = None) -> None:
     moment = int(time.time()) if jetzt is None else jetzt
-    if pfad.exists() and not soll_holen(_letzter_abruf(pfad, symbol), moment):
+    if pfad.exists() and abruf_stand(pfad, symbol) != "fehlgeschlagen" and not soll_holen(_letzter_abruf(pfad, symbol), moment):
         return
     gesammelt: list[Meldung] = []
     fehler = 0
@@ -472,7 +694,7 @@ def _holen(pfad: Path, symbol: str, name: str, oeffnen, jetzt: int | None = None
         antworten += 1
         gesammelt.extend(meldung for meldung in meldungen if _passt(meldung, symbol, name))
     if gesammelt:
-        speichern(pfad, symbol, tuple(gesammelt))
+        speichern(pfad, symbol, tuple(gesammelt), name)
         stand = "gespeichert"
     elif antworten and fehler == 0:
         stand = "keine"
@@ -613,9 +835,11 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         verbindung.execute("ALTER TABLE nachrichten ADD COLUMN rel_5 REAL")
     _url_fuer_mehrere_namen(verbindung)
     spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")}
-    for name in ("art", "ton", "quellenhinweis"):
+    for name in ("art", "ton", "quellenhinweis", "analyse", "ereignis", "zuordnung"):
         if name not in spalten:
             verbindung.execute(f"ALTER TABLE nachrichten ADD COLUMN {name} TEXT")
+    if "erfasst" not in spalten:
+        verbindung.execute("ALTER TABLE nachrichten ADD COLUMN erfasst INTEGER")
     kursspalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(kurse)")}
     if "bereinigt" not in kursspalten:
         verbindung.execute("ALTER TABLE kurse ADD COLUMN bereinigt REAL")
