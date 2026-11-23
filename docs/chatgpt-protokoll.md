@@ -1,104 +1,98 @@
-# MarktRadar – Protokoll für ChatGPT
+# Auftrag an ChatGPT: Schwächen von MarktRadar finden
 
-Stand: Montag, 23. November 2026, etwa 16:52 Uhr Berlin.
-Quelle der Zahlen: die lokale Datenbank `daten/markt.sqlite`. Diese Datei liegt nicht auf GitHub.
-GitHub `main` ist Commit `f7ca57f`. Danach gibt es lokale, noch nicht gepushte Änderungen an Suche, Messstatus und Tests. Das Fenster läuft mit diesem lokalen Stand auf `http://127.0.0.1:64841/`.
+Du prüfst MarktRadar. Du lobst das System nicht und du glättest Lücken nicht. Du suchst Schwächen, falsche Anzeigen, fehlende Daten und Stellen, an denen Code oder Text mehr behauptet, als die Daten tragen.
 
-Lies dieses Protokoll, bevor du über Lernen, Trader oder Prognosen schreibst. Erfinde keine Kurse, keine Erfolgsquoten und kein „die KI ist besser geworden“.
+Repository: https://github.com/Secret-Sebi/MarktRadar
+Branch: `main`
+Diese Datei: https://github.com/Secret-Sebi/MarktRadar/blob/main/docs/chatgpt-protokoll.md
 
-## Was die beiden KIs sind
+## Lies zuerst diese Grenze
 
-Es gibt zwei getrennte Lernwege.
+Dieser Commit enthält nur dieses Dokument. Die Programmänderungen seit `0aa3ddf` sind auf dem Mac lokal und nicht in diesem Commit. Auf GitHub gibt es deshalb unter anderem noch nicht:
 
-1. Die Analyse-KI in `ki.py`. Ein einziges Modell für alle Aktien. Es lernt an Nachrichten, deren späterer Kurs schon bekannt ist.
-2. Die KI-Trader in `haendler.py`. Jeder Trader hat eine eigene Regel, ein eigenes Paper-Buch und erst nach einem Verkauf einen Lernkandidaten. Die aktive Regel bleibt, bis eine spätere Prüfung besteht.
+`nachrichten_analyse.py`, `einfluss.py`, `ki_pruefung.py`, `test_nachrichten_analyse.py`, `test_umsetzung.py`, `test_einfluss.py`
 
-Ein Montag oder ein laufendes Fenster heißt nicht, dass dauernd gelernt wird.
+Wenn eine Datei auf GitHub fehlt, ist die Funktion dort nicht veröffentlicht. Beschreibe sie dann als lokalen, nicht überprüfbaren Stand, nicht als laufenden GitHub-Code. Vermische die beiden Stände nicht.
 
-## Analyse-KI: wie sie beim Messen lernt
+Die Datenbank `daten/markt.sqlite` liegt nicht auf GitHub. Die Zahlen unten sind eine Abfrage auf dem Mac am Montag, 23. November 2026, etwa 17:34 Uhr Berlin. Sie sind eine Momentaufnahme, keine Endbilanz. Die Messrunde kann danach weitergeschrieben haben.
 
-Beim Messen einer Aktie ruft `beobachter.bewerte()` nacheinander Kurs, Technik, Nachrichten, dieses Modell, Fundamentaldaten und Muster auf.
+## Was du nicht tun darfst
 
-Nachrichten landen in der Tabelle `nachrichten`. `lernen.nachtragen()` schreibt später die Kursänderung nach 1, 3, 5 und 20 Handelstagen in `wirkung_1`, `wirkung_3`, `wirkung_5` und `wirkung_20`. Das passiert erst, wenn diese späteren Schlüsse wirklich vorliegen. Vorher bleibt das Feld leer.
+- Erfinde keine Kurse, Nachrichten, Fundamentaldaten, Wahrscheinlichkeiten, Erfolgsquoten oder Ursachen.
+- Schreibe nicht, die KI sei besser geworden. Dafür gibt es keine bestandene unabhängige Prüfung.
+- Eine positive Nachricht ist kein Kauf. Eine negative Nachricht ist kein Verkauf.
+- Ein Kurs nach einer Meldung beweist nicht, dass die Meldung die Ursache war.
+- Bestandene Unit-Tests bedeuten, dass geprüfte Funktionen laufen. Sie bedeuten nicht, dass Prognosen treffsicher sind.
+- Paper-Trading ist keine echte Handelsleistung.
+- 0,125 Prozent Gebühr je Seite und weitere 0,10 Prozent je Seite sind Annahmen. Spread und Slippage sind nicht gemessen.
+- Schlage nicht vor, die Risikogrenzen zu lockern: 1 Prozent Risiko pro Trade, 10 Prozent Positionsgröße, 10 offene Positionen je Trader, 2 Prozent Tagesverlust, Pause bei 8 Prozent Drawdown, mindestens 10 Prozent Cash, kein Margin, keine Optionen, kein Echtgeld, keine echten Brokerorders.
+- `aktion_aus_ki` darf keine Order auslösen. Alpaca ist nicht verbunden. Es gibt keine `.env` im Repository.
 
-`ki.trainiere()` nimmt danach nur Zeilen mit `ki_genutzt = 0` und einem schon gesetzten `wirkung_1` oder `wirkung_5`. Die Eingabe darf nur Kurse verwenden, die vor dem Zeitpunkt der Nachricht lagen: Themenfeld, RSI geteilt durch 100, und ob der Schluss über dem 20-Tage-Schnitt lag. Das Ziel ist 1, wenn die spätere Bewegung positiv war, sonst 0. Ein Schritt ändert die Gewichte mit Lernrate 0,2 und begrenzt sie auf -5 bis 5. Dieselbe Nachricht wird danach mit `ki_genutzt = 1` markiert und nicht noch einmal trainiert. Pro Kalendertag und Aktie zählt nur ein Beispiel.
+## Gemessener Stand, 23. November 2026, etwa 17:34 Uhr
 
-Das Modell ist eine Zeile in `ki_modell`, id 1. Es ist nicht je Aktie getrennt.
+Auswertungen: 627 Zeilen. Davon 611 mit Kursstatus `ok`, 15 ohne Status, 1 `unvollstaendig`. 98 Zeilen haben ein Schrittprotokoll. Davon sind 3 nach den Pflichtschritten vollständig. Ein vorhandener Kurs ist keine vollständige Analyse.
 
-`schaetzung()` liefert erst ab 12 Beispielen eine Zahl. Diese Zahl ist keine freigegebene Wahrscheinlichkeit. `aktion_aus_ki()` gibt die ursprüngliche Entscheidung unverändert zurück und verwirft Modell, Schätzung und Prüfung. Die Messung wird durch dieses Modell also nicht zum Kauf oder Verkauf umetikettiert. Die Oberfläche darf die Zahl nicht als validierte Prognose zeigen.
+Fundamentalstände in diesen 98 Zeilen: 29 `ok`, 57 `fehlt`, 4 `nicht_verfuegbar`, 2 `nicht_anwendbar`, 6 ohne Stand.
 
-`messe()` trainiert auf älteren Nachrichten derselben Aktie neu und zählt Treffer nur auf den letzten 12 Fällen. Dafür braucht es mindestens 24 Fälle. Das Ergebnis ist eine Trefferzahl, keine freigegebene Erfolgsquote für das Dashboard.
+Nachrichtenstände in diesen 98 Zeilen: 57 `ok`, 35 `fehler`, 6 ohne Stand. 35 Fehler sind Quellenausfälle, kein stilles Gelingen.
 
-### Gemessener Stand der Analyse-KI
+Nachrichten gesamt: 3.795. Davon `wirkung_1` gesetzt: 2.482. Gespeicherte `analyse`: 0. Gespeicherte `zuordnung`: 0. Die Ereignissprache wird lokal beim Anzeigen aus der Überschrift berechnet und nicht als damalige Prognose in die Datenbank geschrieben. Alte Zeilen sind dadurch nicht nachträglich als rechtzeitig analysiert gespeichert.
 
-- `ki_modell.beispiele`: 1556. Am Sonntagabend, 22. November, waren es 1533. Seitdem sind 23 Beispiele dazugekommen.
-- Nachrichten gesamt: 3778. Davon `ki_genutzt = 1`: 2482. `wirkung_1` ist bei 2482 Zeilen gesetzt.
-- Nachrichten mit Zeitstempel von heute: 17. Davon `ki_genutzt = 1`: 0. Der nächste Handelstag nach diesen Meldungen ist noch nicht auswertbar, deshalb trainiert das Modell sie noch nicht.
-- Heute neu gespeicherte Messzeilen in `auswertung`: 98. Davon vollständig nach dem Schrittprotokoll: 0. Bei allen 98 fehlt der Fundamental-Schritt. Bei 11 fehlt zusätzlich der Nachrichten-Schritt. Ein frischer Kurs allein ist keine vollständige Analyse.
+`ki_modell.beispiele`: 1.556. Das ist das alte gemischte Modell. Die lokale Änderung trainiert es nicht weiter. Auf GitHub kann der alte Pfad noch sichtbar sein. Die Lücke zwischen 1.556 Beispielen und 2.482 `ki_genutzt = 1` ist nicht umetikettiert. Eine Markierung ist kein Nachweis, dass trainiert wurde.
 
-Die Analyse-KI lernt also nur die Richtung nach einer bereits bekannten Nachricht. Sie lernt nicht aus Fundamentaldaten, nicht aus dem Muster und nicht als geprüfte Prognose. Prognosewahrscheinlichkeiten bleiben leer, solange keine bestandene, unveränderte Prüfung vorliegt.
+Neue lokale Liste `ki_beispiel`: 151 `trainiert`, 231 `ausgeschlossen`. Horizonte, alle `validiert = 0`: 1 und 3 je 43 Beispiele, 5 hat 37, 20 hat 28. Grund: nicht ausreichend trainiert. Freigegeben ist kein Horizont. Die Tabelle `prognose` hat 0 Zeilen. Es wird keine Wahrscheinlichkeit angezeigt.
 
-## KI-Trader: was sie gemacht haben
+Indizes in `kurse`: `^GDAXI` 505 Schlüsse, `^GSPC` 500 Schlüsse. Das sind Marktindizes, keine Branchenindizes.
 
-Die Trader entscheiden mit festen Regeln in `entscheide()`. Eigene Gewichte dürfen einen Kauf nur ablehnen, wenn schon ein passendes Modell mit mindestens 12 Beispielen existiert und die Modellzahl unter 50 Prozent liegt. Dieses Modell existiert derzeit nicht.
+Trader-Fälle: 33 offen, 0 abgeschlossen, 0 gelernt. Offen: RSI 11, Experiment 10, MACD 8, Trend 3, Momentum 1. `ki_haendler_version` 0, `ki_haendler_modell` 0, `ki_haendler_pruefung` 0. Die 11 RSI-Fälle sind alte offene Fälle. Sie werden nicht gelöscht und nicht als gelernt gezählt. Die Grenze von 10 gilt je Trader. Ob der Code auf GitHub den elften Kauf noch zulässt, musst du im veröffentlichten `haendler.py` prüfen. Lokal wird die Grenze vor weiteren Käufen derselben Runde geprüft.
 
-Seit Montag, 23. November, 0:00 Uhr Berlin, bis zur letzten gespeicherten Entscheidung um 16:35 Uhr:
+Meta-AI, Eintrag 17, Zeit `2026-11-23T16:33:49Z`: Phase `seitwaerts` aus gespeicherten DAX-Schlüssen, 20-Tage-Rendite etwa -0,14 Prozent. `gewichte` leer, `krypto_gewichte` leer. Alle 37 Trader stehen in `unzuverlaessig`. Der Hinweis sagt, dass ohne bestandene unabhängige Prüfung keine Gewichtung gesetzt wird und die Risikogrenzen bleiben.
 
-- 15587 Skip
-- 7048 Hold
-- 2 Buy
-- 3 Sell
+Lokale Tests: `python3 -m unittest discover`, 199 Tests, alle bestanden, nach dem Einfluss-Status. Das ist kein Beleg für Prognosequalität. Nicht gelaufen sind ein Verkauf mit anschließender Freigabe, ein Test gegen den ganzen Yahoo-Abruf und ein Neustart mitten in einer Transaktion.
 
-Die zwei Käufe, beide noch offen, mit dem Zusatz „Noch keine passenden Gewichte. Nicht zuverlässig.“:
+## Schwächen, die schon belegt sind
 
-- Momentum, Allianz `ALV.DE`, 14:19 Uhr. Grund der Regel: Schluss nach 20 Tagen und nach 5 Tagen höher.
-- Trend, Amazon `AMZN`, 15:50 Uhr. Grund der Regel: Schluss über dem 20- und dem 50-Tage-Schnitt.
+1. Die Analyse deckt das Universum nicht ab. 627 Zeilen haben einen Preis, nur 3 gespeicherte Messungen sind vollständig.
+2. Fundamentaldaten fehlen in den meisten gespeicherten Schrittprotokollen. Eine Yahoo-Antwort ohne Krume war HTTP 401. Ob der Krume-Pfad auf GitHub schon liegt, siehst du nur im veröffentlichten `fundamental.py`.
+3. Nachrichten sind Schlagzeilen von Yahoo und GDELT, kein Volltext, kein Sprachmodell. Die Stärke von -100 bis 100 ist eine Schlüsselwort-Einordnung, keine Wahrscheinlichkeit. `validiert` bleibt falsch.
+4. Es gibt keine gespeicherte Ereignisanalyse und keine gespeicherte Ursachen-Zuordnung. 2.482 Ein-Tages-Bewegungen sind gemessen, aber nicht als Ursache belegt.
+5. Eine konkrete NVDA-Zeile vom 17. November 2026, 20:26 Uhr UTC, trägt eine Yahoo-Überschrift über erwartete Quartalszahlen und Colette Kress als interimistische Gastgeberin. `wirkung_1` ist etwa -3,30 Prozent. `wirkung_5` und der Indexvergleich fehlen. Daraus folgt keine Ursache. Andere NVIDIA-Überschriften in der Datenbank sind unbestätigt und dürfen nicht als Personalentscheidung über Jensen Huang ausgegeben werden.
+6. Dieselbe Ereignisart am selben Tag soll nicht doppelt zählen. Zehn Artikel über dasselbe Ereignis sind damit nicht als ein geprüftes Ereignis-Cluster nachgewiesen, nur als Regel auf dem Schlüssel.
+7. Verspätete Meldungen, mehr als sechs Stunden nach `zeit`, dürfen lokal nicht als damals bekannt gelten. Das ist eine Regel, keine gemessene Marktstudie.
+8. Makro fehlt. Es gibt keine gespeicherte Reihe für Zinsen, Inflation, Arbeitsmarkt, Einkaufsmanagerindizes, Wechselkurse oder einen Wirtschaftskalender.
+9. Kapitalströme fehlen. Volumen in den Kerzen ist keine Messung von Short Interest, ETF-Flüssen, Insiderdaten, Put/Call oder VIX.
+10. Branche und Lieferkette fehlen. Der Hinweis NVIDIA auf AMD und AVGO ist eine feste Liste für Chip-, KI-, Produkt- und Personal-Ereignisse, keine Messung.
+11. Technik rechnet RSI, MACD, Durchschnitte und Muster. Daraus ist keine validierte Prognose geworden.
+12. Die sechs Bereiche werden lokal nur als Status gezeigt: vorhanden, fehlend, Fehler oder nicht validiert. Sie werden nicht zu einer Note addiert und ersetzen kein Modell.
+13. Die Prognose-Tabelle ist leer. `empfehlung()` gibt im lokalen Code immer „keine ausreichende Datenbasis“ zurück. Kein Horizont hat 108 zeitlich getrennte Fälle mit bestandener Brier-, Log-Loss- und Kalibrierungsprüfung.
+14. Die Trader haben keine abgeschlossene Paper-Position. Ohne Abschluss gibt es keinen Lernkandidaten. Skip und Hold zählen nicht. Kein Trader hat eine Strategie freigegeben.
+15. Die Meta-AI bildet keine Mehrheit und setzt keine Gewichte. Sie kennt auch nicht, welcher Trader welche Nachrichtenkategorie kann. Dafür fehlen abgeschlossene Fälle.
+16. Kosten sind Annahmen. Ein richtiger Richtungsruf wäre kein nachgewiesener Gewinn nach Spread, Slippage und Lücke.
+17. Kurse sind verzögert, nicht Echtzeit. Intraday nach einer Meldung ist nicht gespeichert. Historische Wechselkurse für alte Umrechnungen sind nicht als eigene Reihe nachgewiesen.
+18. Lernen läuft nur, solange der Mac die Runde ausführt. Aus ist kein Training.
+19. Die Oberfläche lädt das HTML beim Start des Fensters einmal. Ein späteres Speichern der Seite ist ohne Neustart nicht sichtbar.
+20. Das Universum ist eine lokale Liste, keine vollständige Börse. Suchreste und Restkürzel bleiben Namen, bis eine Quelle sie führt. Ein geöffnetes Symbol legt keinen Bestand an.
+21. Die Benchmark ist nur DAX für `.DE` und S&P 500 für US-Titel. Ein fremder Index gibt eine Prüfung nicht frei. Krypto hat keine freigegebene Benchmark-Gewichtung.
+22. Gleichzeitige Meldungen, schon laufende Kurse vor der Veröffentlichung und eingepreiste Erwartungen sind nicht als vollständige Event-Study umgesetzt. Der Satz „Wahrscheinlicher Einfluss“ wird bewusst nicht verwendet.
 
-Die drei Verkäufe sind die Krypto-Regel „Schluss unter dem 50-Tage-Schnitt“, nicht ein gelerntes Modell:
+## Wonach du im veröffentlichten Code suchen sollst
 
-- Krypto, Bitcoin, 23. November 00:08 Uhr
-- Krypto, Solana, 00:13 Uhr
-- Krypto, Ethereum, 04:10 Uhr
+Prüfe auf GitHub den Commit, der diese Datei enthält, und den Code, der wirklich in dem Commit liegt. Melde eine Schwäche nur mit Datei und konkreter Stelle oder mit einer der Zahlen oben.
 
-Offene Paper-Fälle in `ki_haendler_fall`: 33. Abgeschlossen: 0. Als gelernt markiert: 0.
+Suche besonders nach:
 
-- RSI 11
-- Experiment 10
-- MACD 8
-- Trend 3
-- Momentum 1
+- stillen Erfolgen, wenn eine Quelle fehlschlägt
+- Prognosen oder Wahrscheinlichkeiten ohne `validiert`
+- Käufen aus Nachrichten oder aus der Meta-AI
+- Look-ahead, also Kursen oder Kennzahlen nach dem Entscheidungszeitpunkt
+- vermischten Horizonten im alten `ki.py`
+- Risikogrenzen, die nur einmal je Runde geprüft werden
+- Anzeigen, die fehlende Daten als null, neutral oder Erfolg darstellen
+- Tests, die eine Funktion aufrufen, aber keine Marktaussage prüfen
+- Dokumentation, die neuer ist als der veröffentlichte Code
 
-`ki_haendler_version`: 0. `ki_haendler_modell`: 0. `ki_haendler_pruefung`: 0. Die Meta-AI hat seit Sonntag, 22. November, 14:14 Uhr keinen neuen Eintrag. Ihre letzte Notiz bleibt „Keine Gewichtung“, Marktphase nicht gemessen.
+Wenn du eine Schwäche nicht im Commit siehst, schreibe „im veröffentlichten Stand nicht geprüft“ statt sie zu erfinden.
 
-## KI-Trader: wie sie lernen
+## Was weiterhin nicht gilt
 
-Ein Kauf schreibt einen offenen Fall. Dabei wird nichts gelernt.
-
-`_fall_zu()` läuft erst beim Verkauf. Dann werden Ausstieg, Nettoergebnis nach der Gebührenannahme und die Ausstiegszeit gespeichert. Spread und Slippage bleiben „nicht gemessen“. Wenn der Fall noch nicht gelernt wurde, ruft `_lerne()` einen Gewichtsschritt auf und speichert zwei Versionszeilen: das bisherige Modell und den Kandidaten mit dem Grund „Kandidat, nicht freigegeben“. Der Fall wird auf `gelernt = 1` gesetzt. Die aktive Regel und `ki_haendler_modell` bleiben unverändert.
-
-`uebernehmen_wenn_besser()` übernimmt den Kandidaten nur, wenn `pruefe()` das Feld `besser` setzt. `pruefe()` trainiert nur auf früheren abgeschlossenen Fällen und prüft spätere. Unter 36 abgeschlossenen Fällen desselben Traders ist das Ergebnis „Nicht ausreichend Daten“. Ab 36 Fällen werden sie zeitlich in drei Teile geteilt. Der Test muss nach der Prüfung liegen.
-
-Freigabe verlangt gleichzeitig:
-
-- Die Prüfung wählt das Modell, weil sein mittleres Netto über dem der Regel liegt.
-- Mindestens 12 spätere Testfälle, und das Modell nimmt mindestens 12 davon.
-- Die untere Grenze dieser Ergebnisse liegt über 0 und über dem Mittel der Regel.
-- Das Modellvermögen endet über dem Start, über der Regel und über einem Indexkauf derselben Haltedauer.
-- Der Rückgang des Modells bleibt bei höchstens 8 Prozent und ist nicht schlechter als der der Regel.
-
-Die Indexreihe für `^GDAXI` und `^GSPC` hat in `kurse` derzeit 0 Zeilen. Ohne diese Reihe ist die Benchmark „nicht gemessen“, und `besser` bleibt falsch. Selbst 36 Verkäufe geben dann nichts frei.
-
-Keiner der 33 Fälle ist verkauft. Ein Trader hat höchstens 11 offene Fälle. Die Freigabe ist damit weder heute noch durch bloßes Weiterlaufen am Montag erreicht.
-
-## Was nicht behauptet werden darf
-
-- Die Trader haben heute nicht dazugelernt.
-- Die Analyse-KI hat 23 weitere Nachrichtenbeispiele in das eine globale Modell geschrieben. Das ist kein Beweis, dass Prognosen besser wurden.
-- 1556 Beispiele sind keine Trefferquote.
-- Skip und Hold sind keine Lernschritte.
-- Die Meta-AI gewichtet nichts und darf die Risikogrenzen nicht ändern.
-- Es wird kein echtes Geld gehandelt. Alpaca ist nicht verbunden.
-
-## Risikogrenzen, unverändert
-
-Höchstens 1 Prozent Risiko pro Trade, 10 Prozent Positionsgröße, 10 offene Positionen, 2 Prozent Tagesverlust, Pause bei 8 Prozent Drawdown, mindestens 10 Prozent Cash. Kein Margin, keine Optionen, kein Echtgeld.
+Kein Trader hat gelernt. Kein Horizont ist validiert. 1.556 alte Beispiele und 151 neue Trainingszeilen sind keine Trefferquote. Spread und Slippage sind nicht gemessen. Die Meta-AI gewichtet nicht. Es wird kein echtes Geld gehandelt.
