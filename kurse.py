@@ -52,6 +52,7 @@ class Kursdaten:
     handelsplatz: str = ""
     hinweis: str = ""
     abweichung: float | None = None
+    zeitzone: str = "UTC"
 
 
 def gueltiges_symbol(symbol: str) -> bool:
@@ -205,6 +206,7 @@ def kurse_aus_antwort(payload: dict) -> Kursdaten | None:
         kursart="verzoegert",
         handelsplatz=str(meta.get("exchangeName") or meta.get("fullExchangeName") or ""),
         hinweis="Verzögerter Yahoo-Finance-Kurs, kein Echtzeit-Feed und nicht der Brokerpreis.",
+        zeitzone=str(meta.get("exchangeTimezoneName") or "UTC"),
     )
 
 

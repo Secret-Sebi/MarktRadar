@@ -4,17 +4,39 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+
+_UTC = timezone.utc  # noqa: UP017
 from pathlib import Path
 
 from analyse import aktion_bei_datenstatus
 from beobachter import haenge_an, lade_liste
-from euro import nach_euro
+from euro import _MAX_ALTER, nach_euro
 from fundamental import aus_yahoo, text
 from kurse import Bar, Kursdaten, _datenstatus, abweichung_prozent
 from quellen import mit_fallback, plausibel
 from quellen_coingecko import kurs_aus_gecko
 from quellen_stooq import stooq_aus_csv, stooq_kuerzel
 from suche import suche_aus_coingecko, suche_aus_yahoo
+
+
+def _reihe(start, ende, hoch=100.0, tief=100.0, kurszeit=None, zeitzone="UTC"):
+    def bar(moment):
+        return Bar(int(moment.timestamp()), 100.0, hoch, tief, 100.0, 100.0, 1.0)
+
+    return Kursdaten(
+        "AAPL",
+        "Apple",
+        "USD",
+        100.0,
+        0.0,
+        False,
+        (100.0, 100.0),
+        110.0,
+        70.0,
+        (bar(start), bar(ende)),
+        kurszeit=kurszeit,
+        zeitzone=zeitzone,
+    )
 
 
 def _kurs(preis=10.0, status="ok"):
@@ -173,6 +195,77 @@ class EuroTests(unittest.TestCase):
         euro = nach_euro(daten, lambda code: ((86400 * 10, 0.9), (86400 * 11, 0.9)))
         self.assertEqual(euro.waehrung, "USD")
         self.assertEqual(euro.preis, 100.0)
+
+    def test_zu_alter_wechselkurs_wird_nicht_verwendet(self):
+        start = datetime(2024, 1, 2, 21, tzinfo=_UTC)
+        spaeter = start + timedelta(seconds=_MAX_ALTER + 86400 + 1)
+        daten = _reihe(start, spaeter)
+        euro = nach_euro(daten, lambda code: ((int(start.timestamp()), 0.8), (int(start.timestamp()) + 86400, 0.8)))
+        self.assertEqual(euro.waehrung, "USD")
+        self.assertNotIn("jeweiligen Handelstags", euro.hinweis)
+
+    def test_mehrere_fehlende_tage_bleiben_dollar(self):
+        start = datetime(2024, 1, 2, 21, tzinfo=_UTC)
+        ende = start + timedelta(days=8)
+        daten = _reihe(start, ende)
+        euro = nach_euro(daten, lambda code: ((int(start.timestamp()), 0.9), (int(start.timestamp()) + 3600, 0.9)))
+        self.assertEqual(euro.waehrung, "USD")
+        self.assertEqual(euro.preis, 100.0)
+
+    def test_wochenende_nutzt_den_freitagskurs(self):
+        freitag = datetime(2024, 1, 5, 21, tzinfo=_UTC)
+        montag = datetime(2024, 1, 8, 21, tzinfo=_UTC)
+        daten = _reihe(freitag, montag, kurszeit=int(montag.timestamp()))
+        euro = nach_euro(daten, lambda code: ((int(freitag.timestamp()), 0.8), (int(freitag.timestamp()) - 86400, 0.7)))
+        self.assertEqual(euro.waehrung, "EUR")
+        self.assertAlmostEqual(euro.balken[-1].schluss, 80.0)
+        self.assertAlmostEqual(euro.preis, 80.0)
+
+    def test_ein_feiertag_bleibt_innerhalb_von_vier_tagen(self):
+        freitag = datetime(2024, 1, 5, 21, tzinfo=_UTC)
+        dienstag = datetime(2024, 1, 9, 21, tzinfo=_UTC)
+        daten = _reihe(freitag, dienstag, kurszeit=int(dienstag.timestamp()))
+        euro = nach_euro(daten, lambda code: ((int(freitag.timestamp()), 0.5), (int(freitag.timestamp()) - 86400, 0.4)))
+        self.assertEqual(euro.waehrung, "EUR")
+        self.assertAlmostEqual(euro.preis, 50.0)
+
+    def test_spaeterer_wechselkurs_am_gleichen_utc_tag_gilt_nicht(self):
+        balken = datetime(2024, 1, 8, 1, tzinfo=_UTC)
+        davor = datetime(2024, 1, 7, 22, tzinfo=_UTC)
+        danach = datetime(2024, 1, 8, 5, tzinfo=_UTC)
+        daten = _reihe(balken, balken + timedelta(days=1), kurszeit=int(balken.timestamp()), zeitzone="America/New_York")
+        euro = nach_euro(
+            daten,
+            lambda code: ((int(davor.timestamp()), 0.5), (int(danach.timestamp()), 2.0), (int((balken + timedelta(days=1)).timestamp()), 0.5)),
+        )
+        self.assertEqual(euro.waehrung, "EUR")
+        self.assertAlmostEqual(euro.balken[0].schluss, 50.0)
+
+    def test_aktueller_kurs_ohne_tageskurs_bleibt_dollar(self):
+        montag = datetime(2024, 1, 8, 21, tzinfo=_UTC)
+        dienstag = datetime(2024, 1, 9, 15, tzinfo=_UTC)
+        daten = _reihe(montag - timedelta(days=1), montag, kurszeit=int(dienstag.timestamp()))
+        euro = nach_euro(
+            daten,
+            lambda code: ((int((montag - timedelta(days=1)).timestamp()), 0.8), (int(montag.timestamp()), 0.8)),
+        )
+        self.assertEqual(euro.waehrung, "USD")
+        self.assertEqual(euro.preis, 100.0)
+        self.assertIn("Kurszeitpunkt", euro.hinweis)
+
+    def test_52_wochen_kommen_aus_der_umgerechneten_reihe(self):
+        start = datetime(2023, 1, 2, 21, tzinfo=_UTC)
+        ende = start + timedelta(days=400)
+        daten = _reihe(start, ende, hoch=110.0, tief=70.0, kurszeit=int(ende.timestamp()))
+        euro = nach_euro(daten, lambda code: ((int(start.timestamp()), 0.5), (int(ende.timestamp()), 2.0)))
+        self.assertEqual(euro.waehrung, "EUR")
+        self.assertAlmostEqual(euro.hoch_52w, 220.0)
+        self.assertAlmostEqual(euro.tief_52w, 140.0)
+        kurz = _reihe(start, start + timedelta(days=2), hoch=110.0, tief=70.0, kurszeit=int((start + timedelta(days=2)).timestamp()))
+        ohne = nach_euro(kurz, lambda code: ((int(start.timestamp()), 2.0), (int((start + timedelta(days=2)).timestamp()), 2.0)))
+        self.assertIsNone(ohne.hoch_52w)
+        self.assertIsNone(ohne.tief_52w)
+        self.assertIn("nicht verfügbar", ohne.hinweis)
 
     def test_ohne_wechselkurs_bleibt_dollar(self):
         daten = Kursdaten("AAPL", "Apple", "USD", 100.0, None, False, (100.0,), 100.0)
