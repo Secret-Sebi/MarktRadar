@@ -138,6 +138,42 @@ class EuroTests(unittest.TestCase):
         self.assertIn("keine historischen Eurokurse", euro.hinweis)
         self.assertAlmostEqual(euro.schluesse[-1] / euro.schluesse[0], 100.0 / 80.0)
 
+    def test_historischer_wechselkurs_aendert_die_eurorendite(self):
+        daten = Kursdaten(
+            "AAPL",
+            "Apple",
+            "USD",
+            100.0,
+            0.0,
+            False,
+            (100.0, 100.0),
+            100.0,
+            100.0,
+            (Bar(86400, 100.0, 100.0, 100.0, 100.0, 100.0, 1.0), Bar(172800, 100.0, 100.0, 100.0, 100.0, 100.0, 1.0)),
+        )
+        euro = nach_euro(daten, lambda code: ((86400, 0.8), (172800, 1.0)) if code == "USD" else ())
+        self.assertEqual(euro.waehrung, "EUR")
+        self.assertAlmostEqual(euro.balken[0].schluss, 80.0)
+        self.assertAlmostEqual(euro.balken[1].schluss, 100.0)
+        self.assertAlmostEqual(euro.tag_pct, 25.0)
+        self.assertIn("jeweiligen Handelstags", euro.hinweis)
+
+    def test_unvollstaendige_wechselkursreihe_bleibt_dollar(self):
+        daten = Kursdaten(
+            "AAPL",
+            "Apple",
+            "USD",
+            100.0,
+            None,
+            False,
+            (100.0, 100.0),
+            100.0,
+            (Bar(1, 100.0, 100.0, 100.0, 100.0, 100.0, 1.0), Bar(86400 * 10, 100.0, 100.0, 100.0, 100.0, 100.0, 1.0)),
+        )
+        euro = nach_euro(daten, lambda code: ((86400 * 10, 0.9), (86400 * 11, 0.9)))
+        self.assertEqual(euro.waehrung, "USD")
+        self.assertEqual(euro.preis, 100.0)
+
     def test_ohne_wechselkurs_bleibt_dollar(self):
         daten = Kursdaten("AAPL", "Apple", "USD", 100.0, None, False, (100.0,), 100.0)
         euro = nach_euro(daten, lambda code: None)

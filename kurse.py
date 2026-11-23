@@ -84,7 +84,7 @@ def abweichung_prozent(erster: float, zweiter: float) -> float | None:
     return (zweiter / erster - 1.0) * 100.0
 
 
-def _wechselkurs(waehrung: str, oeffnen, speicher: dict | None = None) -> float | None:
+def _wechselkurs(waehrung: str, oeffnen, speicher: dict | None = None):
     gemerkt = speicher if speicher is not None else {}
     with _SPERRE:
         if waehrung in gemerkt:
@@ -95,7 +95,12 @@ def _wechselkurs(waehrung: str, oeffnen, speicher: dict | None = None) -> float 
         with _SPERRE:
             gemerkt[waehrung] = None
         return None
-    wert = kurs.preis if kurs.preis > 0 else None
+    reihe = tuple(
+        (bar.zeit, bar.bereinigt if bar.bereinigt and bar.bereinigt > 0 else bar.schluss)
+        for bar in kurs.balken
+        if (bar.bereinigt and bar.bereinigt > 0) or bar.schluss > 0
+    )
+    wert = reihe if len(reihe) >= 2 else (kurs.preis if kurs.preis > 0 else None)
     with _SPERRE:
         gemerkt[waehrung] = wert
     return wert
