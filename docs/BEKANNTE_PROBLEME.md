@@ -14,6 +14,10 @@ Stand: 24. November 2026.
 
 Eine zweite Meldung am selben Kalendertag wird nicht mehr allein deshalb verworfen. Sie bleibt außen vor, wenn sie dieselbe Ereignis-Kennung hat oder ihr Zielzeitraum ein schon trainiertes Beispiel überlappt. Eine alte Zeile mit dem Grund „Gleicher Kalendertag, erstes Beispiel zählt“ wird beim nächsten Lauf dieses Symbols nachgeholt, wenn der Zielzeitraum frei ist. Die Zielzeit kommt aus den gespeicherten Schlüssen, wenn diese Reihe länger ist als die gerade geladene. Eine schon gemessene Prüfung mit Brier-Wert wird nicht durch „Nicht ausreichend trainiert“ ersetzt. Nichts davon gibt ein Modell frei.
 
+## Kerzenzeit, 24. November 2026
+
+Der Schluss einer Tageskerze gilt erst ab einem ausdrücklichen Sitzungsende, nicht ab dem Kerzenbeginn. Eine laufende Kerze gilt erst zum bekannten Kurszeitpunkt. Fehlt das Ende, wird der Schluss nicht geraten. Eine spätere Kurskorrektur ersetzt den gespeicherten Schluss nicht; die neue Fassung landet in `kurse_aenderung` mit `kontaminiert=1`. Trainingszeilen ohne Nachweis `zeitlich=sitzungsende` bleiben gespeichert und kommen nicht in die saubere Prüfung. Kein Horizont ist dadurch freigegeben.
+
 ## Offen
 
 1. Alte Zeilen in `daten/markt.sqlite` haben die neuen Zeiten erst, wenn das Fenster das Symbol mit einer ausreichenden Kursreihe erneut verarbeitet. Ein Massenupdate wurde nicht gestartet.

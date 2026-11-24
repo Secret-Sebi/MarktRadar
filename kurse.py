@@ -32,6 +32,31 @@ class Bar:
     volumen: float | None
 
 
+class _Ende:
+    """Bar.zeit bleibt der Beginn. sitzungsende ist der Zeitpunkt, ab dem der Schluss bekannt ist."""
+
+    def __init__(self, bar: Bar, sitzungsende: int | None):
+        self._bar = bar
+        self.sitzungsende = sitzungsende
+
+    def __getattr__(self, name: str):
+        return getattr(self._bar, name)
+
+
+def mit_ende(bar: Bar, sitzungsende: int | None):
+    return _Ende(bar, sitzungsende)
+
+
+def verfuegbar_bis(bar):
+    """Schlusszeitpunkt, wenn er ausdrücklich steht. Sonst None, ohne eine Zeitzone zu raten."""
+    if "sitzungsende" not in getattr(bar, "__dict__", {}):
+        return None
+    ende = bar.sitzungsende
+    if isinstance(ende, bool) or not isinstance(ende, int):
+        return None
+    return int(ende)
+
+
 @dataclass(frozen=True)
 class Kursdaten:
     symbol: str
@@ -224,16 +249,16 @@ def balken_bauen(
 ) -> tuple[Bar, ...]:
     roh = _roh_balken(zeiten, oeffnen, hochs, tiefs, schluesse, volumen, bereinigt)
     if not roh or live is None:
-        return roh
+        return _sitzungen(roh, zeitzone, None, False)
     if any(bar.zeit is None for bar in roh) or live_zeit is None:
-        return roh[:-1] + (_mit_live(roh[-1], live),)
+        return _sitzungen(roh[:-1] + (_mit_live(roh[-1], live),), zeitzone, live_zeit, True)
     live_tag = _tag(live_zeit, zeitzone)
     letzter_tag = _tag(roh[-1].zeit, zeitzone)
     if live_tag is None or letzter_tag is None or live_tag == letzter_tag:
-        return roh[:-1] + (_mit_live(roh[-1], live),)
+        return _sitzungen(roh[:-1] + (_mit_live(roh[-1], live),), zeitzone, live_zeit, True)
     if live_tag > letzter_tag:
-        return roh + (_neuer_tag(roh[-1], live, live_zeit),)
-    return roh
+        return _sitzungen(roh + (_neuer_tag(roh[-1], live, live_zeit),), zeitzone, live_zeit, True)
+    return _sitzungen(roh, zeitzone, live_zeit, False)
 
 
 def _schluesse(roh: Sequence[object], live) -> tuple[float, ...]:
@@ -336,6 +361,33 @@ def _mit_live(bar: Bar, live: float) -> Bar:
 def _neuer_tag(vorgaenger: Bar, live: float, zeit: int) -> Bar:
     faktor = vorgaenger.bereinigt / vorgaenger.schluss if vorgaenger.schluss else 1.0
     return Bar(zeit, live, live, live, live, live * faktor, None)
+
+
+def _sitzungen(roh: tuple[Bar, ...], zeitzone: str, live_zeit: int | None, letzter_ist_live: bool) -> tuple:
+    """Eine abgeschlossene Kerze gilt erst zur nächsten Kerze, die laufende erst zum bekannten Kurs."""
+    if not roh or not _zone_bekannt(zeitzone):
+        return tuple(mit_ende(bar, None) for bar in roh)
+    ergebnis = []
+    for index, bar in enumerate(roh):
+        if letzter_ist_live and index == len(roh) - 1 and isinstance(live_zeit, int) and not isinstance(live_zeit, bool):
+            ergebnis.append(mit_ende(bar, int(live_zeit)))
+            continue
+        naechste = roh[index + 1].zeit if index + 1 < len(roh) else None
+        if isinstance(naechste, int) and not isinstance(naechste, bool) and isinstance(bar.zeit, int) and naechste > bar.zeit:
+            ergebnis.append(mit_ende(bar, int(naechste)))
+        else:
+            ergebnis.append(mit_ende(bar, None))
+    return tuple(ergebnis)
+
+
+def _zone_bekannt(zeitzone: str) -> bool:
+    if not zeitzone:
+        return False
+    try:
+        ZoneInfo(zeitzone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 def _tag(zeit: int | None, zeitzone: str):

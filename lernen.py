@@ -201,7 +201,12 @@ def zielzeit(balken, zeitpunkt: int, abstand: int) -> tuple[int, int] | None:
     paar = _zielbalken(balken, zeitpunkt, abstand)
     if paar is None:
         return None
-    start, ende = paar[0].zeit, paar[1].zeit
+    start = paar[0].zeit
+    from kurse import verfuegbar_bis
+
+    ende = verfuegbar_bis(paar[1])
+    if ende is None:
+        ende = paar[1].zeit
     if isinstance(start, bool) or isinstance(ende, bool) or not isinstance(start, int) or not isinstance(ende, int):
         return None
     if ende <= start:
@@ -212,6 +217,19 @@ def zielzeit(balken, zeitpunkt: int, abstand: int) -> tuple[int, int] | None:
 def _zielbalken(balken, zeitpunkt: int, abstand: int):
     if abstand < 1:
         return None
+    if any("sitzungsende" in getattr(bar, "__dict__", {}) for bar in balken):
+        from kurse import verfuegbar_bis
+
+        echt = tuple(
+            sorted(
+                (bar for bar in balken if verfuegbar_bis(bar) is not None and _barpreis(bar) > 0),
+                key=lambda bar: bar.zeit or 0,
+            )
+        )
+        offen = [bar for bar in echt if verfuegbar_bis(bar) > zeitpunkt]
+        if len(offen) <= abstand:
+            return None
+        return offen[0], offen[abstand]
     reihe = tuple(sorted((bar for bar in balken if bar.zeit is not None and _barpreis(bar) > 0), key=lambda bar: bar.zeit))
     start = next((index for index, bar in enumerate(reihe) if bar.zeit >= zeitpunkt), None)
     if start is None or start + abstand >= len(reihe):
@@ -803,16 +821,46 @@ def kurse_merken(pfad: Path, symbol: str, balken, hat_bereinigt: bool = False) -
             continue
         bereinigt = getattr(balken_eintrag, "bereinigt", None) if hat_bereinigt else None
         wert = None if not bereinigt or float(bereinigt) <= 0 else float(bereinigt)
-        zeilen.append((rein, int(zeit), float(schluss), wert))
+        ende = getattr(balken_eintrag, "sitzungsende", None)
+        if isinstance(ende, bool) or not isinstance(ende, int):
+            ende = None
+        zeilen.append((rein, int(zeit), float(schluss), wert, ende))
     if not zeilen:
         return 0
     pfad.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(pfad) as verbindung:
         _tabelle(verbindung)
-        verbindung.executemany(
-            "INSERT OR REPLACE INTO kurse (symbol, zeit, schluss, bereinigt) VALUES (?, ?, ?, ?)",
-            zeilen,
-        )
+        for symbol_name, zeit, schluss, wert, ende in zeilen:
+            alt = verbindung.execute(
+                "SELECT schluss FROM kurse WHERE symbol = ? AND zeit = ?",
+                (symbol_name, zeit),
+            ).fetchone()
+            if alt is None:
+                verbindung.execute(
+                    """
+                    INSERT INTO kurse (symbol, zeit, schluss, bereinigt, sitzungsende, kontaminiert)
+                    VALUES (?, ?, ?, ?, ?, 0)
+                    """,
+                    (symbol_name, zeit, schluss, wert, ende),
+                )
+                continue
+            if abs(float(alt[0]) - schluss) > 1e-8:
+                verbindung.execute(
+                    """
+                    INSERT INTO kurse_aenderung (symbol, zeit, schluss, kontaminiert, erfasst)
+                    VALUES (?, ?, ?, 1, ?)
+                    """,
+                    (symbol_name, zeit, schluss, int(time.time())),
+                )
+                continue
+            if ende is not None:
+                verbindung.execute(
+                    """
+                    UPDATE kurse SET sitzungsende = ?
+                    WHERE symbol = ? AND zeit = ? AND sitzungsende IS NULL
+                    """,
+                    (ende, symbol_name, zeit),
+                )
     return len(zeilen)
 
 
@@ -982,6 +1030,21 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
     kursspalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(kurse)")}
     if "bereinigt" not in kursspalten:
         verbindung.execute("ALTER TABLE kurse ADD COLUMN bereinigt REAL")
+    if "sitzungsende" not in kursspalten:
+        verbindung.execute("ALTER TABLE kurse ADD COLUMN sitzungsende INTEGER")
+    if "kontaminiert" not in kursspalten:
+        verbindung.execute("ALTER TABLE kurse ADD COLUMN kontaminiert INTEGER NOT NULL DEFAULT 0")
+    verbindung.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kurse_aenderung (
+            symbol TEXT NOT NULL,
+            zeit INTEGER NOT NULL,
+            schluss REAL NOT NULL,
+            kontaminiert INTEGER NOT NULL DEFAULT 1,
+            erfasst INTEGER NOT NULL
+        )
+        """
+    )
     verbindung.execute(
         """
         CREATE TABLE IF NOT EXISTS abruf (

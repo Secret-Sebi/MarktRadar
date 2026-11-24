@@ -24,6 +24,12 @@ from kurse import Bar
 from lernen import aus_yahoo, nachtragen, speichern
 
 
+def _uhr(pfad: Path) -> None:
+    """Die Testuhr ist die Meldungszeit. Der automatische Speicherstempel liegt sonst in der Gegenwart."""
+    with sqlite3.connect(pfad) as verbindung:
+        verbindung.execute("UPDATE nachrichten SET erfasst = zeit")
+
+
 def _kursreihe(start: float, schritte: int):
     return tuple(Bar(index * 100, None, None, None, start + index, start + index, None) for index in range(1, schritte + 1))
 
@@ -48,6 +54,7 @@ class ModellTests(unittest.TestCase):
             pfad = Path(ordner) / "markt.sqlite"
             balken = _kursreihe(10, 40)
             speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/ki", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             erster = trainiere(pfad, "SAP.DE", balken)
             zweiter = trainiere(pfad, "SAP.DE", balken)
@@ -62,9 +69,10 @@ class ModellTests(unittest.TestCase):
                             {"title": "Nur eine Notiz", "link": "https://beispiel.test/gleicher-tag", "publisher": "Reuters", "providerPublishTime": 2600},
                             {"title": "Noch eine Notiz", "link": "https://beispiel.test/gleicher-tag-2", "publisher": "Reuters", "providerPublishTime": 2700},
                         ]
-                    }
-                ),
+                }
+            ),
             )
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             dritter = trainiere(pfad, "SAP.DE", balken, pruefen=False)
             self.assertGreater(dritter.beispiele, erster.beispiele)
@@ -91,9 +99,10 @@ class ModellTests(unittest.TestCase):
                             {"title": "Quartalszahlen enttäuschen", "link": "https://beispiel.test/a", "publisher": "Reuters", "providerPublishTime": 2401},
                             {"title": "Übernahme wird gemeldet", "link": "https://beispiel.test/b", "publisher": "Reuters", "providerPublishTime": 2450},
                         ]
-                    }
-                ),
+                }
+            ),
             )
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             trainiere(pfad, "SAP.DE", balken, pruefen=False)
             with sqlite3.connect(pfad) as verbindung:
@@ -109,9 +118,11 @@ class ModellTests(unittest.TestCase):
             pfad = Path(ordner) / "markt.sqlite"
             balken = _kursreihe(10, 40)
             speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/alt", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             trainiere(pfad, "SAP.DE", balken, pruefen=False)
             speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "Firma meldet Übernahme", "link": "https://beispiel.test/spaet", "publisher": "Reuters", "providerPublishTime": 3600}]}))
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             with sqlite3.connect(pfad) as verbindung:
                 nummer = verbindung.execute("SELECT id FROM nachrichten WHERE zeit = 3600").fetchone()[0]
@@ -165,6 +176,7 @@ class ModellTests(unittest.TestCase):
             pfad = Path(ordner) / "markt.sqlite"
             balken = _kursreihe(10, 40)
             speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/reihe", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             kurse_merken(pfad, "SAP.DE", balken)
             erster = trainiere(pfad, "SAP.DE", balken, pruefen=False)
@@ -184,6 +196,7 @@ class ModellTests(unittest.TestCase):
             pfad = Path(ordner) / "markt.sqlite"
             balken = _kursreihe(10, 40)
             speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/zielzeit", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             erster = trainiere(pfad, "SAP.DE", balken, pruefen=False)
             with sqlite3.connect(pfad) as verbindung:
@@ -204,6 +217,7 @@ class ModellTests(unittest.TestCase):
             pfad = Path(ordner) / "markt.sqlite"
             balken = _kursreihe(10, 40)
             speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/zielzeit-fest", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            _uhr(pfad)
             nachtragen(pfad, "SAP.DE", balken)
             trainiere(pfad, "SAP.DE", balken, pruefen=False)
             with sqlite3.connect(pfad) as verbindung:

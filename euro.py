@@ -97,7 +97,7 @@ def _kurse(reihe) -> tuple[tuple[int, float], ...]:
 
 
 def _bar_um(bar: Bar, faktor: float) -> Bar:
-    return Bar(
+    neu = Bar(
         bar.zeit,
         _mal(bar.oeffnen, faktor),
         _mal(bar.hoch, faktor),
@@ -106,6 +106,11 @@ def _bar_um(bar: Bar, faktor: float) -> Bar:
         bar.bereinigt * faktor,
         bar.volumen,
     )
+    if "sitzungsende" not in getattr(bar, "__dict__", {}):
+        return neu
+    from kurse import mit_ende
+
+    return mit_ende(neu, bar.sitzungsende)
 
 
 def _ohne_euro(daten: Kursdaten, satz: str) -> Kursdaten:
@@ -170,18 +175,7 @@ def _basis(waehrung: str) -> tuple[str, float]:
 
 
 def _skaliere(daten: Kursdaten, faktor: float, hinweis: str, waehrung: str) -> Kursdaten:
-    balken = tuple(
-        Bar(
-            bar.zeit,
-            _mal(bar.oeffnen, faktor),
-            _mal(bar.hoch, faktor),
-            _mal(bar.tief, faktor),
-            bar.schluss * faktor,
-            bar.bereinigt * faktor,
-            bar.volumen,
-        )
-        for bar in daten.balken
-    )
+    balken = tuple(_bar_um(bar, faktor) for bar in daten.balken)
     return replace(
         daten,
         waehrung=waehrung,

@@ -37,7 +37,7 @@ def merkmale(balken, zeitpunkt: int | None, thema: str) -> tuple[float, ...] | N
     schluesse = tuple(
         bar.schluss
         for bar in sorted(balken, key=lambda bar: bar.zeit or 0)
-        if bar.zeit is not None and (zeitpunkt is None or bar.zeit < zeitpunkt) and bar.schluss > 0
+        if _schluss_bekannt(bar, zeitpunkt)
     )
     if len(schluesse) < 20:
         return None
@@ -47,6 +47,18 @@ def merkmale(balken, zeitpunkt: int | None, thema: str) -> tuple[float, ...] | N
         return None
     thema_werte = tuple(1.0 if name == thema else 0.0 for name in _THEMEN)
     return thema_werte + (max(0.0, min(1.0, rsi_wert / 100.0)), 1.0 if schluesse[-1] > linie else 0.0)
+
+
+def _schluss_bekannt(bar, zeitpunkt: int | None) -> bool:
+    """Ein Tagesende gilt erst nach der Sitzung. Ein bloßer Zeitpunkt bleibt die alte Regel."""
+    from kurse import verfuegbar_bis
+
+    if "sitzungsende" in getattr(bar, "__dict__", {}):
+        ende = verfuegbar_bis(bar)
+        if ende is None or zeitpunkt is None:
+            return False
+        return ende <= zeitpunkt and bar.schluss > 0
+    return bar.zeit is not None and (zeitpunkt is None or bar.zeit < zeitpunkt) and bar.schluss > 0
 
 
 def schritt(modell: Modell, eingabe: tuple[float, ...], ziel: float) -> Modell:
@@ -80,7 +92,7 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
         _tabellen(verbindung)
         zeilen = verbindung.execute(
             """
-            SELECT id, zeit, kategorie, wirkung_1, wirkung_3, wirkung_5, wirkung_20, ereignis
+            SELECT id, zeit, kategorie, wirkung_1, wirkung_3, wirkung_5, wirkung_20, ereignis, erfasst
             FROM nachrichten WHERE symbol = ? ORDER BY zeit, id
             """,
             (symbol,),
@@ -91,15 +103,17 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
         reihe = _reihe_aus_kursen(verbindung, symbol, balken)
         fenster_je = {horizont: _gelernte_fenster(verbindung, symbol, horizont) for horizont in _HORIZONTE}
         ereignisse = {horizont: _gelernte_ereignisse(verbindung, symbol, horizont) for horizont in _HORIZONTE}
-        for nummer, zeit, thema, *wirkungen, ereignis in zeilen:
+        quelle = "sitzungsende" if _reihe_mit_ende(reihe) else "unbewiesen"
+        for nummer, zeit, thema, *wirkungen, ereignis, erfasst in zeilen:
             wirkung = dict(zip(_HORIZONTE, wirkungen))
+            entscheidung = _entscheidung(zeit, erfasst)
             for horizont in _HORIZONTE:
-                fenster = zielzeit(reihe, int(zeit), horizont)
+                fenster = zielzeit(reihe, entscheidung, horizont)
                 if _beispiel_vorhanden(verbindung, int(nummer), horizont):
                     if fenster is not None:
                         _ziel_nachtragen(verbindung, int(nummer), horizont, fenster)
                     if _nachholen_wenn_getrennt(
-                        verbindung, modelle, fenster_je, ereignisse, int(nummer), horizont, int(zeit), str(thema), wirkung[horizont], fenster, ereignis, reihe
+                        verbindung, modelle, fenster_je, ereignisse, int(nummer), horizont, entscheidung, str(thema), wirkung[horizont], fenster, ereignis, reihe, quelle
                     ):
                         neu = True
                     continue
@@ -111,7 +125,7 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
                     _beispiel(verbindung, int(nummer), horizont, int(zeit), "ausgeschlossen", grund, None, None)
                     continue
                 try:
-                    eingabe = merkmale(reihe, int(zeit), str(thema))
+                    eingabe = merkmale(reihe, entscheidung, str(thema))
                 except (TypeError, ValueError):
                     _beispiel(verbindung, int(nummer), horizont, int(zeit), "fehler", "Merkmale konnten nicht gebaut werden", None, None)
                     continue
@@ -123,7 +137,7 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
                 fenster_je[horizont].append(fenster)
                 if ereignis:
                     ereignisse[horizont].add(str(ereignis))
-                _beispiel(verbindung, int(nummer), horizont, int(zeit), "trainiert", "Trainiert auf diesem Horizont", ziel, eingabe, fenster=fenster)
+                _beispiel(verbindung, int(nummer), horizont, int(zeit), "trainiert", "Trainiert auf diesem Horizont", ziel, eingabe, fenster=fenster, zeitlich=quelle)
                 if horizont == 1:
                     verbindung.execute("UPDATE nachrichten SET ki_genutzt = 1 WHERE id = ?", (nummer,))
                 neu = True
@@ -337,6 +351,7 @@ def _validiere_wenn_faellig(pfad: Path, erzwingen: bool = False) -> None:
                     SELECT zeit, merkmale, ziel, ziel_von, ziel_bis FROM ki_beispiel
                     WHERE horizont = ? AND status = 'trainiert' AND merkmale IS NOT NULL AND ziel IS NOT NULL
                       AND ziel_von IS NOT NULL AND ziel_bis IS NOT NULL AND ziel_bis > ziel_von
+                      AND zeitlich = 'sitzungsende'
                     ORDER BY ziel_von, zeit, nachricht_id
                     """,
                     (horizont,),
@@ -435,21 +450,39 @@ def _horizont_schreiben(verbindung: sqlite3.Connection, horizont: int, modell: M
     )
 
 
+def _entscheidung(zeit, erfasst) -> int:
+    """Liegt der Eingang vor, gilt der spätere der beiden Zeitpunkte."""
+    if isinstance(erfasst, bool) or not isinstance(erfasst, int):
+        return int(zeit)
+    return max(int(zeit), int(erfasst))
+
+
+def _reihe_mit_ende(balken) -> bool:
+    return any("sitzungsende" in getattr(bar, "__dict__", {}) for bar in (balken or ()))
+
+
 def _reihe_aus_kursen(verbindung, symbol: str, ersatz):
     """Gespeicherte Schlüsse, wenn sie mehr Historie enthalten als die aktuelle Reihe."""
     try:
         zeilen = verbindung.execute(
-            "SELECT zeit, schluss FROM kurse WHERE symbol = ? AND schluss > 0 ORDER BY zeit",
+            """
+            SELECT zeit, schluss, sitzungsende FROM kurse
+            WHERE symbol = ? AND schluss > 0 AND IFNULL(kontaminiert, 0) = 0
+            ORDER BY zeit
+            """,
             (symbol,),
         ).fetchall()
     except sqlite3.OperationalError:
         return ersatz
     if len(zeilen) < 21:
         return ersatz
-    from kurse import Bar
+    from kurse import Bar, mit_ende
 
-    gespeichert = tuple(Bar(int(zeit), None, None, None, float(schluss), float(schluss), None) for zeit, schluss in zeilen)
-    return gespeichert if len(gespeichert) >= len(tuple(ersatz or ())) else ersatz
+    gespeichert = []
+    for zeit, schluss, ende in zeilen:
+        bar = Bar(int(zeit), None, None, None, float(schluss), float(schluss), None)
+        gespeichert.append(bar if ende is None else mit_ende(bar, int(ende)))
+    return tuple(gespeichert) if len(gespeichert) >= len(tuple(ersatz or ())) else ersatz
 
 
 def _gelernte_fenster(verbindung, symbol: str, horizont: int) -> list[tuple[int, int]]:
@@ -490,7 +523,7 @@ def _sperrgrund(ereignis, fenster, bekannte: set[str], vorhandene: list[tuple[in
     return None
 
 
-def _nachholen_wenn_getrennt(verbindung, modelle, fenster_je, ereignisse, nummer: int, horizont: int, zeit: int, thema: str, bewegung, fenster, ereignis, reihe) -> bool:
+def _nachholen_wenn_getrennt(verbindung, modelle, fenster_je, ereignisse, nummer: int, horizont: int, zeit: int, thema: str, bewegung, fenster, ereignis, reihe, quelle: str) -> bool:
     """Eine frühere Tagessperre wird nur trainiert, wenn das Ziel nicht überlappt."""
     zeile = verbindung.execute(
         "SELECT status, grund FROM ki_beispiel WHERE nachricht_id = ? AND horizont = ?",
@@ -521,10 +554,10 @@ def _nachholen_wenn_getrennt(verbindung, modelle, fenster_je, ereignisse, nummer
     verbindung.execute(
         """
         UPDATE ki_beispiel
-        SET status = 'trainiert', grund = 'Trainiert auf diesem Horizont', ziel = ?, merkmale = ?, ziel_von = ?, ziel_bis = ?
+        SET status = 'trainiert', grund = 'Trainiert auf diesem Horizont', ziel = ?, merkmale = ?, ziel_von = ?, ziel_bis = ?, zeitlich = ?
         WHERE nachricht_id = ? AND horizont = ? AND status = 'ausgeschlossen'
         """,
-        (ziel, json.dumps(eingabe), int(fenster[0]), int(fenster[1]), nummer, horizont),
+        (ziel, json.dumps(eingabe), int(fenster[0]), int(fenster[1]), quelle, nummer, horizont),
     )
     return True
 
@@ -549,11 +582,11 @@ def _beispiel_vorhanden(verbindung: sqlite3.Connection, nummer: int, horizont: i
     return zeile is not None
 
 
-def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, grund: str, ziel, eingabe, erfasst: int | None = None, fenster: tuple[int, int] | None = None) -> None:
+def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, grund: str, ziel, eingabe, erfasst: int | None = None, fenster: tuple[int, int] | None = None, zeitlich: str | None = None) -> None:
     verbindung.execute(
         """
-        INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit, erfasst, ziel_von, ziel_bis)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit, erfasst, ziel_von, ziel_bis, zeitlich)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             nummer,
@@ -566,6 +599,7 @@ def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, gr
             int(time.time()) if erfasst is None else int(erfasst),
             None if fenster is None else int(fenster[0]),
             None if fenster is None else int(fenster[1]),
+            zeitlich,
         ),
     )
 
@@ -630,6 +664,8 @@ def _tabellen(verbindung: sqlite3.Connection) -> None:
         verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN ziel_von INTEGER")
     if spalten_beispiel and "ziel_bis" not in spalten_beispiel:
         verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN ziel_bis INTEGER")
+    if spalten_beispiel and "zeitlich" not in spalten_beispiel:
+        verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN zeitlich TEXT")
     spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")}
     if spalten and "ki_genutzt" not in spalten:
         verbindung.execute("ALTER TABLE nachrichten ADD COLUMN ki_genutzt INTEGER NOT NULL DEFAULT 0")

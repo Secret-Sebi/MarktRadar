@@ -74,6 +74,6 @@ Hier weitermachen, nicht bei einem neuen System:
 
 ## 9. Letzter bearbeiteter Stand
 
-Zuletzt geändert: `ki.py` und `test_ki.py`. Unterschiedliche Meldungen bleiben erhalten, überlappende Ziele nicht. Eine gemessene Prüfung wird nicht gelöscht. Kein Modell ist freigegeben.
+Zuletzt geändert: Kerzenzeit in `kurse.py`, `ki.py`, `lernen.py`, `euro.py`. Der Tagesschluss gilt erst nach dem Sitzungsende. Alte Beispiele ohne diesen Nachweis bleiben gespeichert und sind von der sauberen Prüfung ausgenommen. Kein Modell ist freigegeben. Meta-KI, neue Modellfamilien und Trader-Gewichtungen sind nicht umgesetzt.
 
 Vorheriger veröffentlichter Commit: `a5134ba`.
