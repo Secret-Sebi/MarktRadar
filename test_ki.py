@@ -76,6 +76,51 @@ class ModellTests(unittest.TestCase):
             self.assertTrue(status[1:])
             self.assertTrue(all(wert == "ausgeschlossen" for wert in status[1:]))
 
+    def test_fehlende_zielzeit_wird_nachgetragen_ohne_zweites_training(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            balken = _kursreihe(10, 40)
+            speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/zielzeit", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            nachtragen(pfad, "SAP.DE", balken)
+            erster = trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            with sqlite3.connect(pfad) as verbindung:
+                vorher = verbindung.execute("SELECT COUNT(*) FROM ki_beispiel").fetchone()[0]
+                verbindung.execute("UPDATE ki_beispiel SET ziel_von = NULL, ziel_bis = NULL WHERE status = 'trainiert'")
+            zweiter = trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            self.assertEqual(zweiter.beispiele, erster.beispiele)
+            with sqlite3.connect(pfad) as verbindung:
+                self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_beispiel").fetchone()[0], vorher)
+                zeiten = verbindung.execute(
+                    "SELECT ziel_von, ziel_bis FROM ki_beispiel WHERE status = 'trainiert'"
+                ).fetchall()
+            self.assertTrue(zeiten)
+            self.assertTrue(all(von is not None and bis is not None and bis > von for von, bis in zeiten))
+
+    def test_vollstaendige_zielzeit_und_fehlende_rekonstruktion_bleiben_unveraendert(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            balken = _kursreihe(10, 40)
+            speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/zielzeit-fest", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            nachtragen(pfad, "SAP.DE", balken)
+            trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute("UPDATE ki_beispiel SET ziel_von = 11, ziel_bis = 22")
+                anzahl = verbindung.execute("SELECT COUNT(*) FROM ki_beispiel").fetchone()[0]
+            trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            with sqlite3.connect(pfad) as verbindung:
+                self.assertEqual(
+                    verbindung.execute("SELECT COUNT(*), MIN(ziel_von), MAX(ziel_bis) FROM ki_beispiel").fetchone(),
+                    (anzahl, 11, 22),
+                )
+                verbindung.execute("UPDATE ki_beispiel SET ziel_von = NULL, ziel_bis = NULL WHERE status = 'trainiert'")
+            trainiere(pfad, "SAP.DE", _kursreihe(10, 5), pruefen=False)
+            with sqlite3.connect(pfad) as verbindung:
+                leer = verbindung.execute(
+                    "SELECT COUNT(*) FROM ki_beispiel WHERE status = 'trainiert' AND ziel_von IS NULL AND ziel_bis IS NULL"
+                ).fetchone()[0]
+                self.assertEqual(verbindung.execute("SELECT COUNT(*) FROM ki_beispiel").fetchone()[0], anzahl)
+            self.assertGreater(leer, 0)
+
     def test_modell_entscheidet_selbst_und_lernt_den_ausgang_einmal(self):
         balken = _kursreihe(10, 30)
         leer = leeres_modell()

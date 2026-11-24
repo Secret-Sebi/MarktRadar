@@ -92,17 +92,15 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
         for nummer, zeit, thema, *wirkungen in zeilen:
             wirkung = dict(zip(_HORIZONTE, wirkungen))
             for horizont in _HORIZONTE:
-                if _beispiel_vorhanden(verbindung, int(nummer), horizont):
-                    continue
-                bewegung = wirkung[horizont]
-                if bewegung is None:
-                    continue
-                tag = int(zeit) // 86400
                 fenster = zielzeit(balken, int(zeit), horizont)
                 if _beispiel_vorhanden(verbindung, int(nummer), horizont):
                     if fenster is not None:
                         _ziel_nachtragen(verbindung, int(nummer), horizont, fenster)
                     continue
+                bewegung = wirkung[horizont]
+                if bewegung is None:
+                    continue
+                tag = int(zeit) // 86400
                 if fenster is None:
                     continue
                 if tag in tage[horizont]:
