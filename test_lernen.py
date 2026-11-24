@@ -246,10 +246,10 @@ class WirkungTests(unittest.TestCase):
     def test_pruefbalken_zaehlen_beispiele_und_nicht_einen_lernanteil(self):
         with tempfile.TemporaryDirectory() as ordner:
             stand = fortschritt(Path(ordner) / "markt.sqlite")
-        self.assertEqual(len(stand["pruefung"]), 5)
+        self.assertEqual(len(stand["pruefung"]), 4)
         self.assertEqual(stand["pruefung"][0]["von"], 108)
         self.assertIn("Nicht gelernt", stand["pruefung"][0]["satz"])
-        self.assertEqual(stand["pruefung"][-1]["von"], 36)
+        self.assertTrue(all(zeile["von"] == 108 for zeile in stand["pruefung"]))
         self.assertNotIn("%", "".join(zeile["satz"] for zeile in stand["pruefung"]))
         self.assertEqual(stand["abschnitte"]["einheit"], "Beispiele")
         self.assertEqual(stand["abschnitte"]["gesamt"], 0)
@@ -312,12 +312,42 @@ class WirkungTests(unittest.TestCase):
                 )
                 verbindung.execute(
                     "INSERT INTO ki_horizont (horizont, beispiele, validiert, pruefung) VALUES (1, 181, 0, ?)",
-                    ('{"grund": "Validierung schlägt die Basisrate nicht", "brier": 0.374, "basis_brier": 0.222}',),
+                    ('{"grund": "Validierung schlägt die Basisrate nicht", "brier": 0.374, "basis_brier": 0.222, "gemessen": "validierung"}',),
                 )
             balken = _pruefung_balken(pfad)
         self.assertIn("nicht bestanden", balken[0]["satz"])
         self.assertIn("Basisrate", balken[0]["satz"])
         self.assertIn("Nicht freigegeben", balken[0]["satz"])
+        self.assertIn("Validierung, nicht der Test", balken[0]["satz"])
+
+    def test_trader_zaehlen_nur_eigene_abschluesse(self):
+        from lernen import _pruefung_balken
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute("CREATE TABLE ki_haendler_fall (haendler TEXT, ausstieg TEXT)")
+                verbindung.execute("INSERT INTO ki_haendler_fall (haendler, ausstieg) VALUES ('MACD', '1')")
+                verbindung.execute("INSERT INTO ki_haendler_fall (haendler, ausstieg) VALUES ('RSI', NULL)")
+                verbindung.execute("INSERT INTO ki_haendler_fall (haendler, ausstieg) VALUES ('RSI', NULL)")
+            zeilen = {zeile["name"]: zeile for zeile in _pruefung_balken(pfad)}
+        self.assertEqual(zeilen["MACD"]["wert"], 1)
+        self.assertEqual(zeilen["RSI"]["wert"], 0)
+        self.assertIn("2 offen", zeilen["RSI"]["satz"])
+        self.assertNotIn("MACD", zeilen["RSI"]["satz"])
+
+    def test_zielzeit_nimmt_den_naechsten_vorhandenen_kurs(self):
+        from kurse import Bar
+        from lernen import zielzeit
+
+        freitag = 1_700_000_000
+        montag = freitag + 3 * 86400
+        balken = (
+            Bar(freitag, None, None, None, 10.0, 10.0, None),
+            Bar(montag, None, None, None, 11.0, 11.0, None),
+        )
+        self.assertEqual(zielzeit(balken, freitag, 1), (freitag, montag))
+        self.assertIsNone(zielzeit(balken, freitag, 2))
 
 
 class AbrufTests(unittest.TestCase):

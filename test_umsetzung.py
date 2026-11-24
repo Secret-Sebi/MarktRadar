@@ -15,8 +15,11 @@ from ki_pruefung import pruefe_faelle
 from kurse import Bar
 
 
-def _fall(zeit: int, ziel: int):
-    return (zeit, (float(ziel),) + (0.0,) * 7, float(ziel))
+def _fall(zeit: int, ziel: int, fenster: bool = True):
+    basis = (zeit, (float(ziel),) + (0.0,) * 7, float(ziel))
+    if not fenster:
+        return basis
+    return basis + (zeit * 10, zeit * 10 + 9)
 
 
 class UmsetzungTests(unittest.TestCase):
@@ -33,13 +36,53 @@ class UmsetzungTests(unittest.TestCase):
         self.assertFalse(pruefe_faelle(tuple(_fall(index, 1) for index in range(120)))["bestanden"])
 
     def test_ueberlappender_zielzeitraum_besteht_nicht(self):
-        bericht = pruefe_faelle(tuple(_fall(index, index % 2) for index in range(120)), sperre=10)
+        faelle = []
+        for index in range(120):
+            start = index * 10
+            ende = 10_000 if index < 20 else start + 9
+            faelle.append((index, (float(index % 2),) + (0.0,) * 7, float(index % 2), start, ende))
+        bericht = pruefe_faelle(tuple(faelle))
         self.assertFalse(bericht["bestanden"])
         self.assertEqual(bericht["grund"], "Zielzeitraum reicht in die nächste Prüfung")
+        self.assertIsNone(bericht["test"])
 
     def test_abstand_groesser_als_die_sperre_kann_bestehen(self):
-        bericht = pruefe_faelle(tuple(_fall(index * 11, index % 2) for index in range(120)), sperre=10)
+        bericht = pruefe_faelle(tuple(_fall(index, index % 2) for index in range(120)))
         self.assertTrue(bericht["bestanden"], bericht["grund"])
+        self.assertIsNotNone(bericht["test"])
+        self.assertIsNotNone(bericht["validierung"])
+
+    def test_fehlende_validierung_schreibt_keine_testkennzahl(self):
+        bericht = pruefe_faelle(tuple(_fall(index, 1) for index in range(120)))
+        self.assertFalse(bericht["bestanden"])
+        self.assertEqual(bericht["gemessen"], "validierung")
+        self.assertIsNone(bericht["test"])
+        self.assertIsNotNone(bericht["test_von"])
+        self.assertLessEqual(bericht["train_bis"], bericht["test_von"])
+        self.assertIsNotNone(bericht["validierung"]["brier"])
+        gehalten = bericht["test_von"]
+        erneut = pruefe_faelle(tuple(_fall(index, 1) for index in range(160)), gehalten, testen=True)
+        self.assertIsNone(erneut["test"])
+        self.assertLessEqual(erneut["train_bis"], gehalten)
+        self.assertFalse(erneut["bestanden"])
+
+    def test_ohne_zielzeit_wird_nicht_verwendet(self):
+        bericht = pruefe_faelle(tuple(_fall(index, index % 2, False) for index in range(120)))
+        self.assertFalse(bericht["bestanden"])
+        self.assertEqual(bericht["grund"], "Zielzeitpunkt fehlt")
+        self.assertIsNone(bericht["test"])
+        self.assertEqual(bericht["ohne_zielzeit"], 120)
+
+    def test_gehaltener_test_wandert_nicht_ins_training(self):
+        erste = pruefe_faelle(tuple(_fall(index, index % 2) for index in range(120)))
+        gehalten = erste["test_von"]
+        spaeter = tuple(_fall(index, index % 2) for index in range(120, 160))
+        bericht = pruefe_faelle(tuple(_fall(index, index % 2) for index in range(160)), gehalten)
+        self.assertLessEqual(bericht["train_bis"], gehalten)
+        self.assertIsNone(bericht["test"])
+        self.assertEqual(bericht["test_von"], gehalten)
+        self.assertIn("gehalten", bericht["grund"])
+        self.assertGreater(len(spaeter), 0)
 
     def test_leere_fundamentalantwort_ist_nicht_verfuegbar_und_fehler_werden_nicht_gehalten(self):
         _CACHE.clear()

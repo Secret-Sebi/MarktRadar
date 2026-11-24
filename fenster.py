@@ -1,5 +1,7 @@
 """Eigenes dunkles Fenster. Die Zeichenfläche von Tk bleibt auf diesem Mac weiß."""
 
+from __future__ import annotations
+
 import json
 import sqlite3
 import subprocess
@@ -283,6 +285,9 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
         rest = [3]
         erledigt = set()
 
+        def melde_vorgang(name, stand):
+            setze_vorgang(bild, name, stand)
+
         def beginne(symbol, anzahl_runde=runde, anzahl_gesamt=gesamt_jetzt, hinweis=hinweis_jetzt, menge=menge, erledigt=erledigt):
             _zeigen(
                 bild,
@@ -298,6 +303,8 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
                 offen=tuple(name for name in menge if name != symbol and name not in erledigt),
                 misst=True,
             )
+            for name in ("kurs", "nachrichten", "spaeter"):
+                setze_vorgang(bild, name, "wartet")
 
         def teilweise(zeilen, anzahl_runde=runde, anzahl_gesamt=gesamt_jetzt, hinweis=hinweis_jetzt, namen=watchlist, budget=rest, menge=menge, erledigt=erledigt):
             karten = stand_bauen(zeilen, datetime.now(BERLIN), 0, True)["karten"]
@@ -326,7 +333,7 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
 
         try:
             moment, zeilen, zustand, naechste = beobachte(
-                menge, zustand, ausgabe, sekunden, bei_zeile=teilweise, bei_start=beginne
+                menge, zustand, ausgabe, sekunden, bei_zeile=teilweise, bei_start=beginne, bei_vorgang=melde_vorgang
             )
             speichere_zustand(ZUSTAND, zustand)
             if zeilen:
@@ -364,6 +371,31 @@ def _runde(sekunden, symbole, zustand, bild, sofort, zu) -> None:
             return
         sofort.wait(naechste)
         sofort.clear()
+
+
+def schritt_anzeige(live: str | None, gespeichert: str | None) -> str:
+    """Nur ein vom Backend gemeldeter Lauf zählt als laufend."""
+    if live == "laeuft":
+        return "läuft"
+    woerter = {
+        "ok": "erfolgreich",
+        "erfolgreich": "erfolgreich",
+        "fehler": "fehlgeschlagen",
+        "fehlgeschlagen": "fehlgeschlagen",
+        "nicht_verfuegbar": "nicht verfügbar",
+        "nicht_anwendbar": "nicht verfügbar",
+    }
+    return woerter.get(str(gespeichert or ""), "wartet")
+
+
+def setze_vorgang(bild, name: str, stand: str) -> None:
+    aktuell = dict(bild.lesen())
+    lauf = dict(aktuell.get("lauf") or {})
+    vorgaenge = dict(lauf.get("vorgaenge") or {})
+    vorgaenge[name] = schritt_anzeige(stand if stand == "laeuft" else None, stand)
+    lauf["vorgaenge"] = vorgaenge
+    aktuell["lauf"] = lauf
+    bild.setzen(aktuell)
 
 
 def bild_zeilen(
@@ -441,6 +473,7 @@ def _zeigen(bild, zeilen, arbeitet: bool, status: str, moment, naechste: int = 0
         "symbol": symbol,
         "offen": list(offen),
         "misst": bool(misst),
+        "vorgaenge": dict((stand.get("lauf") or {}).get("vorgaenge") or {}),
     }
     try:
         from papier import ansicht

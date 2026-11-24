@@ -354,6 +354,18 @@ class EuroTests(unittest.TestCase):
         self.assertAlmostEqual(euro.balken[-1].schluss, 100.0)
         self.assertIn("Kurszeitpunkt", euro.hinweis)
 
+    def test_hinweistext_stuft_pfund_nicht_als_pence_ein(self):
+        from dataclasses import replace
+
+        daten = replace(
+            _reihe(datetime(2024, 1, 2, tzinfo=_UTC), datetime(2024, 1, 3, tzinfo=_UTC)),
+            waehrung="GBP",
+            hinweis="Pence wurden in Pfund umgerechnet.",
+        )
+        euro = nach_euro(daten, lambda code: 1.2)
+        self.assertEqual(euro.waehrung, "GBP")
+        self.assertIn("Ursprungswährung", euro.hinweis)
+
     def test_zukuenftiger_pence_kurs_wird_nicht_verwendet(self):
         euro = nach_euro(_pence(), lambda code: ((86400, 0.5), (172800 + 3600, 9.0), (172800, 1.0)))
         self.assertEqual(euro.waehrung, "EUR")

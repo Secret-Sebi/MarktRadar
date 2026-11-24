@@ -273,9 +273,9 @@ def lauf(
         schlaf(naechste)
 
 
-def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinweis=None, bei_zeile=None, bei_start=None):
+def beobachte(symbole, zustand, ausgabe, sekunden=None, uhr=datetime.now, hinweis=None, bei_zeile=None, bei_start=None, bei_vorgang=None):
     moment = uhr(BERLIN)
-    zeilen = sammle(symbole, bei_zeile=bei_zeile, bei_start=bei_start)
+    zeilen = sammle(symbole, bei_zeile=bei_zeile, bei_start=bei_start, bei_vorgang=bei_vorgang)
     naechste = warte_sekunden(moment, sekunden)
     zustand, meldungen = zustand_nach_runde(zustand, zeilen, moment.isoformat(timespec="minutes"))
     speichere_zustand(ZUSTAND, zustand)
@@ -384,7 +384,7 @@ def zustand_nach_runde(alt: dict, zeilen: Sequence[Zeile], zeit: str):
     return {"symbole": neu}, tuple(meldungen)
 
 
-def sammle(symbole: Sequence[str], bei_zeile=None, bei_start=None) -> tuple[Zeile, ...]:
+def sammle(symbole: Sequence[str], bei_zeile=None, bei_start=None, bei_vorgang=None) -> tuple[Zeile, ...]:
     fx: dict = {}
     if not symbole:
         return ()
@@ -403,7 +403,7 @@ def sammle(symbole: Sequence[str], bei_zeile=None, bei_start=None) -> tuple[Zeil
                 continue
             if bei_start is not None:
                 bei_start(symbol)
-            zeilen = zeilen + (bewerte(symbol, fertige_indizes.get(vergleichsindex(symbol)), fx, ergebnis),)
+            zeilen = zeilen + (bewerte(symbol, fertige_indizes.get(vergleichsindex(symbol)), fx, ergebnis, bei_vorgang),)
             if bei_zeile is not None:
                 bei_zeile(zeilen)
     return zeilen
@@ -416,14 +416,22 @@ def _kurs_oder_fehler(symbol: str, fx: dict):
         return fehler
 
 
-def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeile:
+def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None, bei_vorgang=None) -> Zeile:
+    def melde(name: str, stand: str) -> None:
+        if bei_vorgang is not None:
+            bei_vorgang(name, stand)
+
     if isinstance(daten, Exception):
+        melde("kurs", "fehlgeschlagen")
         return _fehler(symbol, str(daten))
     try:
         if daten is None:
+            melde("kurs", "laeuft")
             daten = hole_kurs(symbol, fx=fx)
     except (ConnectionError, LookupError, ValueError, json.JSONDecodeError) as fehler:
+        melde("kurs", "fehlgeschlagen")
         return _fehler(symbol, str(fehler))
+    melde("kurs", "erfolgreich" if daten is not None and daten.preis is not None else "fehlgeschlagen")
     zahlen = kennzahlen_aus_schluessen(daten.schluesse, daten.ist_etf, daten.hoch_52w)
     technik = berechne(
         daten.balken,
@@ -444,6 +452,7 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
     modell_stand = "fehlt"
     try:
         index_balken = None if markt is None else getattr(markt, "balken", None)
+        melde("nachrichten", "laeuft")
         befund = aktualisiere(
             DATENBANK,
             daten.symbol or symbol,
@@ -451,10 +460,12 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
             daten.balken,
             index_balken=index_balken,
             kurse_bereinigt=bool(daten.hat_bereinigt),
+            bei_vorgang=bei_vorgang,
         )
         lern_satz = satz(befund)
         thema = befund.kategorie
         nachrichten_stand = _nachrichten_stand(abruf_stand(DATENBANK, daten.symbol or symbol))
+        melde("nachrichten", "fehlgeschlagen" if nachrichten_stand == "fehler" else "erfolgreich" if nachrichten_stand == "ok" else "nicht_verfuegbar")
         if aktion_aus_lernen(urteil.aktion, befund.anzahl, befund.median) != urteil.aktion:
             urteil = Urteil(
                 "abwarten",
@@ -468,6 +479,7 @@ def bewerte(symbol: str, markt=None, fx: dict | None = None, daten=None) -> Zeil
             )
     except (OSError, sqlite3.Error):
         nachrichten_stand = "fehler"
+        melde("nachrichten", "fehlgeschlagen")
         lern_satz = "Die bisherigen Nachrichten konnten nicht gespeichert werden."
     try:
         modell = trainiere(DATENBANK, daten.symbol or symbol, daten.balken)

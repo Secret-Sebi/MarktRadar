@@ -12,6 +12,14 @@ from seite import seite_html, stand_bauen
 
 
 class FensterTests(unittest.TestCase):
+    def test_laufstatus_kommt_nur_vom_backend(self):
+        from fenster import schritt_anzeige
+
+        self.assertEqual(schritt_anzeige(None, None), "wartet")
+        self.assertEqual(schritt_anzeige("laeuft", "ok"), "läuft")
+        self.assertEqual(schritt_anzeige(None, "ok"), "erfolgreich")
+        self.assertEqual(schritt_anzeige(None, "fehler"), "fehlgeschlagen")
+        self.assertEqual(schritt_anzeige(None, "nicht_verfuegbar"), "nicht verfügbar")
     def test_balken_zeigen_ausgewertet_und_fehlend(self):
         from fenster import bild_zeilen
 

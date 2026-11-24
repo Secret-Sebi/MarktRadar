@@ -12,65 +12,145 @@ _TEST = 36
 _CLIP = 1e-6
 
 
-def pruefe_faelle(faelle: tuple[tuple[int, tuple[float, ...], float], ...], sperre: int = 0) -> dict:
-    """Sperre ist der Mindestabstand in Sekunden bis das Ziel bekannt sein kann.
+def pruefe_faelle(faelle: tuple, gehalten_bis: int | None = None, *, testen: bool = False) -> dict:
+    """Der Test wird erst bewertet, wenn die Validierung bestanden ist.
 
-    Drei Kalendertage je Handelstag sind ein Puffer, kein Börsenkalender.
+    Jeder Fall braucht Zielbeginn und Zielende. Ein Ziel, das in den nächsten
+    Abschnitt reicht, trainiert diesen Abschnitt nicht. Ein schon bewerteter
+    Test bleibt aus dem Training.
     """
-    geordnet = tuple(sorted(faelle, key=lambda fall: fall[0]))
+    nutzbar = tuple(fall for fall in faelle if _fenster(fall) is not None)
+    ohne = len(faelle) - len(nutzbar)
+    if not nutzbar:
+        return _abschluss(False, 0, "Zielzeitpunkt fehlt", None, None, None, None, ohne)
+    geordnet = tuple(sorted(nutzbar, key=lambda fall: (_anfang(fall), fall[0])))
+    if gehalten_bis is not None:
+        return _wiederholung(geordnet, int(gehalten_bis), ohne, testen)
     if len(geordnet) < _TRAIN + _VAL + _TEST:
-        return _leer(len(geordnet), "Nicht ausreichend trainiert")
+        return _abschluss(False, len(geordnet), "Nicht ausreichend trainiert", None, None, None, None, ohne)
     test = geordnet[-_TEST:]
     val = geordnet[-(_TEST + _VAL):-_TEST]
     train = geordnet[:-(_TEST + _VAL)]
-    if test[0][0] <= val[-1][0] or val[0][0] <= train[-1][0]:
-        return _leer(len(geordnet), "Testfälle liegen nicht nach der Prüfung")
-    if sperre > 0:
-        train = tuple(fall for fall in train if fall[0] + sperre <= val[0][0])
-        val = tuple(fall for fall in val if fall[0] + sperre <= test[0][0])
-        if len(train) < _TRAIN or len(val) < _VAL:
-            return _leer(len(geordnet), "Zielzeitraum reicht in die nächste Prüfung")
+    if not _danach(train, val) or not _danach(val, test):
+        return _abschluss(False, len(geordnet), "Testfälle liegen nicht nach der Prüfung", None, None, None, None, ohne)
+    train = _purge(train, val)
+    val = _purge(val, test)
+    if len(train) < _TRAIN or len(val) < _VAL:
+        return _abschluss(False, len(geordnet), "Zielzeitraum reicht in die nächste Prüfung", None, None, None, None, ohne)
     basis = _rate(train)
     val_modell = _fit(train)
+    grenze = _anfang(test[0])
     if not _besser(val_modell, val, basis):
-        return _bericht(False, len(geordnet), "Validierung schlägt die Basisrate nicht", val_modell, test, basis)
+        return _abschluss(False, len(geordnet), "Validierung schlägt die Basisrate nicht", _messung(val_modell, val, basis), None, _ende(train[-1]), grenze, ohne)
     fenster = train + val
     for start in range(_TRAIN, len(fenster) - _VAL + 1, _VAL):
         block = fenster[start:start + _VAL]
-        if len(block) < _VAL or block[0][0] <= fenster[start - 1][0]:
+        if len(block) < _VAL or not _danach(fenster[:start], block):
             continue
-        vorher = tuple(fall for fall in fenster[:start] if sperre <= 0 or fall[0] + sperre <= block[0][0])
+        vorher = _purge(fenster[:start], block)
         if len(vorher) < _TRAIN:
-            return _bericht(False, len(geordnet), "Zielzeitraum reicht in die nächste Prüfung", val_modell, test, basis)
+            return _abschluss(False, len(geordnet), "Zielzeitraum reicht in die nächste Prüfung", _messung(val_modell, val, basis), None, _ende(train[-1]), grenze, ohne)
         if not _besser(_fit(vorher), block, _rate(vorher)):
-            return _bericht(False, len(geordnet), "Walk-forward schlägt die Basisrate nicht", val_modell, test, basis)
+            return _abschluss(False, len(geordnet), "Walk-forward schlägt die Basisrate nicht", _messung(val_modell, val, basis), None, _ende(train[-1]), grenze, ohne)
     kandidat = _fit(fenster)
-    if not _besser(kandidat, test, _rate(fenster)):
-        return _bericht(False, len(geordnet), "Test schlägt die Basisrate nicht", kandidat, test, basis)
+    test_basis = _rate(fenster)
+    test_messung = _messung(kandidat, test, test_basis)
+    if not _besser(kandidat, test, test_basis):
+        return _abschluss(False, len(geordnet), "Test schlägt die Basisrate nicht", _messung(val_modell, val, basis), test_messung, _ende(train[-1]), _anfang(test[0]), ohne)
     if not _kalibriert(kandidat, test):
-        return _bericht(False, len(geordnet), "Kalibrierung nicht ausreichend", kandidat, test, basis)
-    bericht = _bericht(True, len(geordnet), "Horizont geprüft. Der Test hat die Gewichte nicht trainiert.", kandidat, test, basis)
+        return _abschluss(False, len(geordnet), "Kalibrierung nicht ausreichend", _messung(val_modell, val, basis), test_messung, _ende(train[-1]), _anfang(test[0]), ohne)
+    bericht = _abschluss(True, len(geordnet), "Horizont geprüft. Der Test hat die Gewichte nicht trainiert.", _messung(val_modell, val, basis), test_messung, _ende(train[-1]), _anfang(test[0]), ohne)
     bericht["gewichte"] = kandidat.gewichte
     bericht["bias"] = kandidat.bias
     return bericht
 
 
-def _leer(anzahl: int, grund: str) -> dict:
-    return {"bestanden": False, "grund": grund, "n": anzahl, "brier": None, "logloss": None, "basis_brier": None, "kalibrierung": None}
+def _wiederholung(geordnet, gehalten_bis: int, ohne: int, testen: bool) -> dict:
+    vorher = tuple(fall for fall in geordnet if _ende(fall) <= gehalten_bis)
+    if len(vorher) < _TRAIN + _VAL:
+        return _abschluss(False, len(vorher), "Nicht ausreichend trainiert", None, None, None, gehalten_bis, ohne)
+    val = vorher[-_VAL:]
+    train = _purge(vorher[:-_VAL], val)
+    if len(train) < _TRAIN or not _danach(train, val):
+        return _abschluss(False, len(vorher), "Zielzeitraum reicht in die nächste Prüfung", None, None, None, gehalten_bis, ohne)
+    basis = _rate(train)
+    modell = _fit(train)
+    messung = _messung(modell, val, basis)
+    if not _besser(modell, val, basis):
+        return _abschluss(False, len(vorher), "Validierung schlägt die Basisrate nicht", messung, None, _ende(train[-1]), gehalten_bis, ohne)
+    test = tuple(fall for fall in geordnet if _anfang(fall) >= gehalten_bis)
+    if not testen or len(test) < _TEST or not _danach(val, test):
+        return _abschluss(False, len(vorher), "Test bleibt gehalten. Keine erneute Testwertung.", messung, None, _ende(train[-1]), gehalten_bis, ohne)
+    kandidat = _fit(train + val)
+    test_basis = _rate(train + val)
+    test_messung = _messung(kandidat, test, test_basis)
+    if not _besser(kandidat, test, test_basis):
+        return _abschluss(False, len(geordnet), "Test schlägt die Basisrate nicht", messung, test_messung, _ende(train[-1]), gehalten_bis, ohne)
+    if not _kalibriert(kandidat, test):
+        return _abschluss(False, len(geordnet), "Kalibrierung nicht ausreichend", messung, test_messung, _ende(train[-1]), gehalten_bis, ohne)
+    bericht = _abschluss(True, len(geordnet), "Horizont geprüft. Der Test hat die Gewichte nicht trainiert.", messung, test_messung, _ende(train[-1]), gehalten_bis, ohne)
+    bericht["gewichte"] = kandidat.gewichte
+    bericht["bias"] = kandidat.bias
+    return bericht
 
 
-def _bericht(bestanden: bool, anzahl: int, grund: str, modell: Modell, test, basis: float) -> dict:
-    brier, logloss = _scores(modell, test)
-    basis_brier, basis_logloss = _scores_konstante(basis, test)
+def _fenster(fall) -> tuple[int, int] | None:
+    if len(fall) < 5 or isinstance(fall[3], bool) or isinstance(fall[4], bool):
+        return None
+    if not isinstance(fall[3], int) or not isinstance(fall[4], int) or fall[4] <= fall[3]:
+        return None
+    return fall[3], fall[4]
+
+
+def _anfang(fall) -> int:
+    return int(fall[3])
+
+
+def _ende(fall) -> int:
+    return int(fall[4])
+
+
+def _danach(links, rechts) -> bool:
+    return bool(links and rechts and _anfang(rechts[0]) > _anfang(links[-1]) and _ende(links[-1]) <= _anfang(rechts[0]))
+
+
+def _purge(links, rechts):
+    if not rechts:
+        return tuple(links)
+    grenze = _anfang(rechts[0])
+    return tuple(fall for fall in links if _ende(fall) <= grenze)
+
+
+def _messung(modell: Modell, faelle, basis: float) -> dict:
+    brier, logloss = _scores(modell, faelle)
+    basis_brier, basis_logloss = _scores_konstante(basis, faelle)
     return {
-        "bestanden": bestanden,
-        "grund": grund,
-        "n": anzahl,
+        "n": len(faelle),
         "brier": brier,
         "logloss": logloss,
         "basis_brier": basis_brier,
         "basis_logloss": basis_logloss,
-        "kalibrierung": _luecken(modell, test),
+        "kalibrierung": _luecken(modell, faelle),
+    }
+
+
+def _abschluss(bestanden: bool, anzahl: int, grund: str, validierung, test, train_bis, test_von, ohne: int) -> dict:
+    quelle = test if test is not None else validierung
+    return {
+        "bestanden": bestanden,
+        "grund": grund,
+        "n": anzahl,
+        "gemessen": "test" if test is not None else "validierung",
+        "validierung": validierung,
+        "test": test,
+        "brier": None if quelle is None else quelle["brier"],
+        "logloss": None if quelle is None else quelle["logloss"],
+        "basis_brier": None if quelle is None else quelle["basis_brier"],
+        "basis_logloss": None if quelle is None else quelle["basis_logloss"],
+        "kalibrierung": None if quelle is None else quelle["kalibrierung"],
+        "train_bis": train_bis,
+        "test_von": test_von,
+        "ohne_zielzeit": ohne,
     }
 
 
@@ -78,15 +158,15 @@ def _fit(faelle) -> Modell:
     """Mehrere Durchgänge nur auf diesem Abschnitt. Der Testabschnitt bleibt außen."""
     modell = leeres_modell()
     for _durchgang in range(8):
-        for _zeit, eingabe, ziel in faelle:
-            modell = schritt(modell, eingabe, ziel)
+        for fall in faelle:
+            modell = schritt(modell, fall[1], fall[2])
     return modell
 
 
 def _rate(faelle) -> float:
     if not faelle:
         return 0.5
-    return sum(ziel for _zeit, _eingabe, ziel in faelle) / len(faelle)
+    return sum(fall[2] for fall in faelle) / len(faelle)
 
 
 def _besser(modell: Modell, faelle, basis: float) -> bool:
@@ -96,12 +176,12 @@ def _besser(modell: Modell, faelle, basis: float) -> bool:
 
 
 def _scores(modell: Modell, faelle) -> tuple[float, float]:
-    paare = tuple((wahrscheinlichkeit(modell, eingabe), ziel) for _zeit, eingabe, ziel in faelle)
+    paare = tuple((wahrscheinlichkeit(modell, fall[1]), fall[2]) for fall in faelle)
     return _mittel_brier(paare), _mittel_logloss(paare)
 
 
 def _scores_konstante(basis: float, faelle) -> tuple[float, float]:
-    paare = tuple((basis, ziel) for _zeit, _eingabe, ziel in faelle)
+    paare = tuple((basis, fall[2]) for fall in faelle)
     return _mittel_brier(paare), _mittel_logloss(paare)
 
 
@@ -127,10 +207,10 @@ def _kalibriert(modell: Modell, test) -> bool:
 
 def _luecken(modell: Modell, test) -> list[dict]:
     eimer: list[list[tuple[float, float]]] = [[] for _ in range(5)]
-    for _zeit, eingabe, ziel in test:
-        p = wahrscheinlichkeit(modell, eingabe)
+    for fall in test:
+        p = wahrscheinlichkeit(modell, fall[1])
         index = min(4, int(p * 5))
-        eimer[index].append((p, ziel))
+        eimer[index].append((p, fall[2]))
     return [
         {
             "n": len(werte),

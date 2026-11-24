@@ -343,15 +343,17 @@ function abrufZeilen(zeile) {
   const lauf = (standJetzt && standJetzt.lauf) || {};
   const aktiv = !!(lauf.misst && lauf.symbol === zeile.symbol);
   if (!aktiv) return el("div");
+  const vorgaenge = lauf.vorgaenge || {};
   const block = el("section", "panel");
   const titel = el("h2");
   text(titel, "Abruf");
   block.append(titel);
-  ["Kurs", "Nachrichten", "Späterer Kurs"].forEach(function (name) {
+  [["kurs", "Kurs"], ["nachrichten", "Nachrichten"], ["spaeter", "Späterer Kurs"]].forEach(function (paar) {
+    const wort = vorgaenge[paar[0]] || "wartet";
     const zeileText = el("div", "ladezeile");
-    zeileText.append(ladePunkt(true));
+    if (wort === "läuft") zeileText.append(ladePunkt(true));
     const satz = el("span");
-    text(satz, name + " wird gerade geholt");
+    text(satz, paar[1] + ": " + wort);
     zeileText.append(satz);
     block.append(zeileText);
   });
@@ -364,7 +366,9 @@ function fortschritt(block) {
     if (!zeile || !zeile.von) return;
     const kasten = el("div", "panel");
     const name = el("div", "ladezeile");
-    if (lauf.arbeitet) name.append(ladePunkt(!!lauf.misst));
+    const vorgaenge = lauf.vorgaenge || {};
+    const licht = (zeile.name.indexOf("Kurszeit") === 0 && vorgaenge.kurs === "läuft") || (zeile.name.indexOf("Nachrichten") === 0 && vorgaenge.nachrichten === "läuft") || (zeile.name.indexOf("späterem Kurs") !== -1 && vorgaenge.spaeter === "läuft");
+    if (licht) name.append(ladePunkt(true));
     const schrift = el("span");
     text(schrift, zeile.name + " " + zeile.wert + " / " + zeile.von);
     name.append(schrift);

@@ -190,13 +190,33 @@ def abruf_stand(pfad: Path, symbol: str) -> str:
 
 
 def wirkung(balken, zeitpunkt: int, abstand: int) -> float | None:
+    paar = _zielbalken(balken, zeitpunkt, abstand)
+    if paar is None or _barpreis(paar[0]) == 0:
+        return None
+    return (_barpreis(paar[1]) / _barpreis(paar[0]) - 1.0) * 100.0
+
+
+def zielzeit(balken, zeitpunkt: int, abstand: int) -> tuple[int, int] | None:
+    """Beginn des Prognoseziels und der Zeitpunkt, an dem das Ergebnis bekannt ist."""
+    paar = _zielbalken(balken, zeitpunkt, abstand)
+    if paar is None:
+        return None
+    start, ende = paar[0].zeit, paar[1].zeit
+    if isinstance(start, bool) or isinstance(ende, bool) or not isinstance(start, int) or not isinstance(ende, int):
+        return None
+    if ende <= start:
+        return None
+    return int(start), int(ende)
+
+
+def _zielbalken(balken, zeitpunkt: int, abstand: int):
     if abstand < 1:
         return None
     reihe = tuple(sorted((bar for bar in balken if bar.zeit is not None and _barpreis(bar) > 0), key=lambda bar: bar.zeit))
     start = next((index for index, bar in enumerate(reihe) if bar.zeit >= zeitpunkt), None)
-    if start is None or start + abstand >= len(reihe) or _barpreis(reihe[start]) == 0:
+    if start is None or start + abstand >= len(reihe):
         return None
-    return (_barpreis(reihe[start + abstand]) / _barpreis(reihe[start]) - 1.0) * 100.0
+    return reihe[start], reihe[start + abstand]
 
 
 def _barpreis(bar) -> float:
@@ -486,11 +506,19 @@ def statistik(pfad: Path, symbol: str) -> Befund:
         return Befund(name, gesamt[0], gesamt[1], "mehrere Kürzel", anzahl_eigen, median_eigen)
 
 
-def aktualisiere(pfad: Path, symbol: str, name: str, balken, oeffnen=urlopen, index_balken=None, kurse_bereinigt: bool = False) -> Befund:
+def aktualisiere(pfad: Path, symbol: str, name: str, balken, oeffnen=urlopen, index_balken=None, kurse_bereinigt: bool = False, bei_vorgang=None) -> Befund:
     kurse_merken(pfad, symbol, balken, kurse_bereinigt)
     _holen(pfad, symbol, name, oeffnen)
+    if bei_vorgang is not None:
+        bei_vorgang("nachrichten", "erfolgreich")
     if pfad.exists():
+        if bei_vorgang is not None:
+            bei_vorgang("spaeter", "laeuft")
         nachtragen(pfad, symbol, balken, index_balken)
+        if bei_vorgang is not None:
+            bei_vorgang("spaeter", "erfolgreich")
+    elif bei_vorgang is not None:
+        bei_vorgang("spaeter", "nicht_verfuegbar")
     return statistik(pfad, symbol) if pfad.exists() else Befund("unklar", 0, None, "keine Meldung")
 
 
@@ -580,7 +608,7 @@ def _pruefung_balken(pfad: Path | None) -> tuple[dict, ...]:
     """Beispiele bis die Prüfung starten kann. Das ist kein Lernanteil."""
     schwelle = 108
     staende = {horizont: (0, 0, {}) for horizont in (1, 3, 5, 20)}
-    trader_zu = 0
+    trader: tuple = ()
     if pfad is not None and pfad.exists():
         with sqlite3.connect(pfad) as verbindung:
             tabellen = {str(zeile[0]) for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -592,18 +620,21 @@ def _pruefung_balken(pfad: Path | None) -> tuple[dict, ...]:
                         pruefung = {}
                     staende[int(horizont)] = (int(beispiele or 0), int(validiert or 0), pruefung if isinstance(pruefung, dict) else {})
             if "ki_haendler_fall" in tabellen:
-                trader_zu = int(verbindung.execute("SELECT SUM(ausstieg IS NOT NULL) FROM ki_haendler_fall").fetchone()[0] or 0)
+                trader = tuple(
+                    verbindung.execute(
+                        """
+                        SELECT haendler, SUM(ausstieg IS NULL), SUM(ausstieg IS NOT NULL)
+                        FROM ki_haendler_fall
+                        GROUP BY haendler
+                        ORDER BY haendler
+                        """
+                    )
+                )
     balken = []
     for horizont, werte in staende.items():
         balken.append({"name": f"{horizont} Handelstage", "wert": werte[0], "von": schwelle, "satz": _pruef_satz(werte[1], werte[0], schwelle, werte[2])})
-    balken.append(
-        {
-            "name": "Abgeschlossene Trader-Fälle",
-            "wert": trader_zu,
-            "von": 36,
-            "satz": "Je Trader nötig, bevor eine Regel ersetzt werden darf. Nichts übernommen.",
-        }
-    )
+    for name, offen, zu in trader:
+        balken.append(_trader_balken(str(name), int(offen or 0), int(zu or 0)))
     return tuple(balken)
 
 
@@ -618,7 +649,16 @@ def _pruef_satz(validiert: int, beispiele: int, schwelle: int, pruefung: dict) -
     vergleich = ""
     if isinstance(brier, (int, float)) and isinstance(basis, (int, float)):
         vergleich = f" Brier {brier:.3f}, Basis {basis:.3f}."
-    return f"Prüfung nicht bestanden: {grund}.{vergleich} Nicht freigegeben."
+    bereich = " Das ist die Validierung, nicht der Test." if pruefung.get("gemessen") == "validierung" else ""
+    return f"Prüfung nicht bestanden: {grund}.{vergleich} Nicht freigegeben.{bereich}"
+
+
+def _trader_balken(name: str, offen: int, zu: int) -> dict:
+    if zu >= 36:
+        satz = "Genug eigene Abschlüsse für eine Prüfung. Noch keine Freigabe aus dieser Zahl."
+    else:
+        satz = f"{zu} abgeschlossen, {offen} offen. Noch keine unabhängige Prüfung."
+    return {"name": name, "wert": zu, "von": 36, "offen": offen, "satz": satz}
 
 
 def _freigabe_text(balken) -> str:

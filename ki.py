@@ -85,6 +85,8 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
             """,
             (symbol,),
         ).fetchall()
+        from lernen import zielzeit
+
         modelle = {horizont: _horizont_lesen(verbindung, horizont) for horizont in _HORIZONTE}
         tage = {horizont: _trainierte_tage(verbindung, symbol, horizont) for horizont in _HORIZONTE}
         for nummer, zeit, thema, *wirkungen in zeilen:
@@ -96,6 +98,13 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
                 if bewegung is None:
                     continue
                 tag = int(zeit) // 86400
+                fenster = zielzeit(balken, int(zeit), horizont)
+                if _beispiel_vorhanden(verbindung, int(nummer), horizont):
+                    if fenster is not None:
+                        _ziel_nachtragen(verbindung, int(nummer), horizont, fenster)
+                    continue
+                if fenster is None:
+                    continue
                 if tag in tage[horizont]:
                     _beispiel(verbindung, int(nummer), horizont, int(zeit), "ausgeschlossen", "Gleicher Kalendertag, erstes Beispiel zählt", None, None)
                     continue
@@ -110,7 +119,7 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
                 ziel = 1.0 if float(bewegung) > 0 else 0.0
                 modelle[horizont] = schritt(modelle[horizont], eingabe, ziel)
                 tage[horizont].add(tag)
-                _beispiel(verbindung, int(nummer), horizont, int(zeit), "trainiert", "Trainiert auf diesem Horizont", ziel, eingabe)
+                _beispiel(verbindung, int(nummer), horizont, int(zeit), "trainiert", "Trainiert auf diesem Horizont", ziel, eingabe, fenster=fenster)
                 if horizont == 1:
                     verbindung.execute("UPDATE nachrichten SET ki_genutzt = 1 WHERE id = ?", (nummer,))
                 neu = True
@@ -318,16 +327,19 @@ def _validiere_wenn_faellig(pfad: Path, erzwingen: bool = False) -> None:
                 except json.JSONDecodeError:
                     vorher = {}
             faelle = tuple(
-                (int(zeit), tuple(float(wert) for wert in json.loads(merkmale)), float(ziel))
-                for zeit, merkmale, ziel in verbindung.execute(
+                (int(zeit), tuple(float(wert) for wert in json.loads(merkmale)), float(ziel), int(ziel_von), int(ziel_bis))
+                for zeit, merkmale, ziel, ziel_von, ziel_bis in verbindung.execute(
                     """
-                    SELECT zeit, merkmale, ziel FROM ki_beispiel
+                    SELECT zeit, merkmale, ziel, ziel_von, ziel_bis FROM ki_beispiel
                     WHERE horizont = ? AND status = 'trainiert' AND merkmale IS NOT NULL AND ziel IS NOT NULL
-                    ORDER BY zeit, nachricht_id
+                      AND ziel_von IS NOT NULL AND ziel_bis IS NOT NULL AND ziel_bis > ziel_von
+                    ORDER BY ziel_von, zeit, nachricht_id
                     """,
                     (horizont,),
                 )
             )
+            gehalten = vorher.get("test_von") if isinstance(vorher.get("test_von"), int) else None
+            schon_bewertet = isinstance(vorher.get("test"), dict)
             if len(faelle) < 108 and not erzwingen:
                 bericht = {
                     "bestanden": False,
@@ -338,11 +350,32 @@ def _validiere_wenn_faellig(pfad: Path, erzwingen: bool = False) -> None:
                     "basis_brier": None,
                     "basis_logloss": None,
                     "kalibrierung": None,
+                    "test": vorher.get("test") if schon_bewertet else None,
+                    "test_von": gehalten,
                 }
             elif not erzwingen and isinstance(vorher.get("zeit"), int) and time.time() - vorher["zeit"] < 900 and vorher.get("n") == len(faelle):
                 continue
             else:
-                bericht = pruefe_faelle(faelle, horizont * 3 * 86400)
+                bericht = pruefe_faelle(
+                    faelle,
+                    gehalten if isinstance(gehalten, int) else None,
+                    testen=isinstance(gehalten, int) and not schon_bewertet,
+                )
+                if isinstance(vorher.get("test"), dict) and bericht.get("test") is None:
+                    bericht["test"] = vorher["test"]
+                    bericht["test_von"] = gehalten
+                    bericht["gemessen"] = "test"
+                    for feld in ("brier", "logloss", "basis_brier", "basis_logloss", "kalibrierung"):
+                        bericht[feld] = bericht["test"].get(feld)
+                    if vorher.get("bestanden"):
+                        alt = verbindung.execute(
+                            "SELECT einsatz_gewichte, einsatz_bias FROM ki_horizont WHERE horizont = ?",
+                            (horizont,),
+                        ).fetchone()
+                        if alt and alt[0]:
+                            bericht["gewichte"] = json.loads(alt[0])
+                            bericht["bias"] = alt[1]
+                            bericht["bestanden"] = True
             bericht["zeit"] = int(time.time())
             gewichte = bericht.pop("gewichte", None)
             bias = bericht.pop("bias", None)
@@ -412,11 +445,11 @@ def _beispiel_vorhanden(verbindung: sqlite3.Connection, nummer: int, horizont: i
     return zeile is not None
 
 
-def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, grund: str, ziel, eingabe, erfasst: int | None = None) -> None:
+def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, grund: str, ziel, eingabe, erfasst: int | None = None, fenster: tuple[int, int] | None = None) -> None:
     verbindung.execute(
         """
-        INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit, erfasst)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit, erfasst, ziel_von, ziel_bis)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             nummer,
@@ -427,7 +460,20 @@ def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, gr
             None if eingabe is None else json.dumps(eingabe),
             zeit,
             int(time.time()) if erfasst is None else int(erfasst),
+            None if fenster is None else int(fenster[0]),
+            None if fenster is None else int(fenster[1]),
         ),
+    )
+
+
+def _ziel_nachtragen(verbindung, nummer: int, horizont: int, fenster: tuple[int, int]) -> None:
+    verbindung.execute(
+        """
+        UPDATE ki_beispiel
+        SET ziel_von = ?, ziel_bis = ?
+        WHERE nachricht_id = ? AND horizont = ? AND (ziel_bis IS NULL OR ziel_von IS NULL)
+        """,
+        (int(fenster[0]), int(fenster[1]), nummer, horizont),
     )
 
 
@@ -467,6 +513,8 @@ def _tabellen(verbindung: sqlite3.Connection) -> None:
             merkmale TEXT,
             zeit INTEGER NOT NULL,
             erfasst INTEGER,
+            ziel_von INTEGER,
+            ziel_bis INTEGER,
             PRIMARY KEY (nachricht_id, horizont)
         )
         """
@@ -474,6 +522,10 @@ def _tabellen(verbindung: sqlite3.Connection) -> None:
     spalten_beispiel = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(ki_beispiel)")}
     if spalten_beispiel and "erfasst" not in spalten_beispiel:
         verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN erfasst INTEGER")
+    if spalten_beispiel and "ziel_von" not in spalten_beispiel:
+        verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN ziel_von INTEGER")
+    if spalten_beispiel and "ziel_bis" not in spalten_beispiel:
+        verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN ziel_bis INTEGER")
     spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")}
     if spalten and "ki_genutzt" not in spalten:
         verbindung.execute("ALTER TABLE nachrichten ADD COLUMN ki_genutzt INTEGER NOT NULL DEFAULT 0")
