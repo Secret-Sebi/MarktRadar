@@ -6,6 +6,8 @@ Repository: https://github.com/Secret-Sebi/MarktRadar
 Branch: `main`
 Diese Datei: https://github.com/Secret-Sebi/MarktRadar/blob/main/docs/chatgpt-protokoll.md
 
+Der neuere Laufbericht steht in `docs/chat-hub.md`. Er ist am 24. November 2026, 15:36 Uhr Berlin, aus der lokalen Datenbank geschrieben. Die Zahlen weiter unten in dieser Datei bleiben die ältere Abfrage vom 23. November, etwa 17:34 Uhr. Mische die beiden Stände nicht.
+
 ## Lies zuerst diese Grenze
 
 Dieser Commit veröffentlicht den lokalen Analysestand seit `0aa3ddf`, nicht nur dieses Dokument. Dazu gehören unter anderem `nachrichten_analyse.py`, `einfluss.py`, `ki_pruefung.py` und die zugehörigen Tests. `watchlist.txt` und die Datenbank bleiben draußen. Eine Datei, die in dem Commit fehlt, ist nicht veröffentlicht.
