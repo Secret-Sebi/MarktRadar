@@ -4,6 +4,8 @@ Du analysierst einen abgeschlossenen Messlauf von MarktRadar. Du lobst ihn nicht
 
 Abfrage auf dem Mac: Dienstag, 24. November 2026, 15:36 Uhr Berlin. Die Datenbank `daten/markt.sqlite` liegt nicht auf GitHub. Die Lernanzeige, die Sperre für überlappende Zielzeiträume und die Pence-Korrektur liegen auf `main`. Die Zahlen bleiben diese Abfrage.
 
+Der spätere Tagesstand vom 24. November 2026, 23:14 Uhr Berlin, steht in `docs/lernen-2026-11-24.md`. Die Zahlen hier nicht mit dem Tagesstand mischen.
+
 ## Was es nicht gibt
 
 Es gibt kein Protokoll, in dem die KI einen Gedankengang aufschreibt. Gespeichert sind Regeln, Zähler und der Grund einer Prüfung. Ein Satz wie „die KI hat erkannt“ ist nur zulässig, wenn derselbe Satz unten als gespeicherter `grund` steht.
