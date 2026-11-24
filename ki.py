@@ -80,7 +80,7 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
         _tabellen(verbindung)
         zeilen = verbindung.execute(
             """
-            SELECT id, zeit, kategorie, wirkung_1, wirkung_3, wirkung_5, wirkung_20
+            SELECT id, zeit, kategorie, wirkung_1, wirkung_3, wirkung_5, wirkung_20, ereignis
             FROM nachrichten WHERE symbol = ? ORDER BY zeit, id
             """,
             (symbol,),
@@ -88,26 +88,30 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
         from lernen import zielzeit
 
         modelle = {horizont: _horizont_lesen(verbindung, horizont) for horizont in _HORIZONTE}
-        tage = {horizont: _trainierte_tage(verbindung, symbol, horizont) for horizont in _HORIZONTE}
-        for nummer, zeit, thema, *wirkungen in zeilen:
+        reihe = _reihe_aus_kursen(verbindung, symbol, balken)
+        fenster_je = {horizont: _gelernte_fenster(verbindung, symbol, horizont) for horizont in _HORIZONTE}
+        ereignisse = {horizont: _gelernte_ereignisse(verbindung, symbol, horizont) for horizont in _HORIZONTE}
+        for nummer, zeit, thema, *wirkungen, ereignis in zeilen:
             wirkung = dict(zip(_HORIZONTE, wirkungen))
             for horizont in _HORIZONTE:
-                fenster = zielzeit(balken, int(zeit), horizont)
+                fenster = zielzeit(reihe, int(zeit), horizont)
                 if _beispiel_vorhanden(verbindung, int(nummer), horizont):
                     if fenster is not None:
                         _ziel_nachtragen(verbindung, int(nummer), horizont, fenster)
+                    if _nachholen_wenn_getrennt(
+                        verbindung, modelle, fenster_je, ereignisse, int(nummer), horizont, int(zeit), str(thema), wirkung[horizont], fenster, ereignis, reihe
+                    ):
+                        neu = True
                     continue
                 bewegung = wirkung[horizont]
-                if bewegung is None:
+                if bewegung is None or fenster is None:
                     continue
-                tag = int(zeit) // 86400
-                if fenster is None:
-                    continue
-                if tag in tage[horizont]:
-                    _beispiel(verbindung, int(nummer), horizont, int(zeit), "ausgeschlossen", "Gleicher Kalendertag, erstes Beispiel zählt", None, None)
+                grund = _sperrgrund(ereignis, fenster, ereignisse[horizont], fenster_je[horizont])
+                if grund is not None:
+                    _beispiel(verbindung, int(nummer), horizont, int(zeit), "ausgeschlossen", grund, None, None)
                     continue
                 try:
-                    eingabe = merkmale(balken, int(zeit), str(thema))
+                    eingabe = merkmale(reihe, int(zeit), str(thema))
                 except (TypeError, ValueError):
                     _beispiel(verbindung, int(nummer), horizont, int(zeit), "fehler", "Merkmale konnten nicht gebaut werden", None, None)
                     continue
@@ -116,7 +120,9 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
                     continue
                 ziel = 1.0 if float(bewegung) > 0 else 0.0
                 modelle[horizont] = schritt(modelle[horizont], eingabe, ziel)
-                tage[horizont].add(tag)
+                fenster_je[horizont].append(fenster)
+                if ereignis:
+                    ereignisse[horizont].add(str(ereignis))
                 _beispiel(verbindung, int(nummer), horizont, int(zeit), "trainiert", "Trainiert auf diesem Horizont", ziel, eingabe, fenster=fenster)
                 if horizont == 1:
                     verbindung.execute("UPDATE nachrichten SET ki_genutzt = 1 WHERE id = ?", (nummer,))
@@ -339,18 +345,24 @@ def _validiere_wenn_faellig(pfad: Path, erzwingen: bool = False) -> None:
             gehalten = vorher.get("test_von") if isinstance(vorher.get("test_von"), int) else None
             schon_bewertet = isinstance(vorher.get("test"), dict)
             if len(faelle) < 108 and not erzwingen:
-                bericht = {
-                    "bestanden": False,
-                    "grund": "Nicht ausreichend trainiert",
-                    "n": len(faelle),
-                    "brier": None,
-                    "logloss": None,
-                    "basis_brier": None,
-                    "basis_logloss": None,
-                    "kalibrierung": None,
-                    "test": vorher.get("test") if schon_bewertet else None,
-                    "test_von": gehalten,
-                }
+                if isinstance(vorher.get("brier"), (int, float)):
+                    bericht = dict(vorher)
+                    bericht["fenster_n"] = len(faelle)
+                    bericht["hinweis"] = "Die letzte Messung bleibt stehen. Für eine neue Prüfung haben zu wenige Fälle eine Zielzeit."
+                    bericht["bestanden"] = False
+                else:
+                    bericht = {
+                        "bestanden": False,
+                        "grund": "Nicht ausreichend trainiert",
+                        "n": len(faelle),
+                        "brier": None,
+                        "logloss": None,
+                        "basis_brier": None,
+                        "basis_logloss": None,
+                        "kalibrierung": None,
+                        "test": vorher.get("test") if schon_bewertet else None,
+                        "test_von": gehalten,
+                    }
             elif not erzwingen and isinstance(vorher.get("zeit"), int) and time.time() - vorher["zeit"] < 900 and vorher.get("n") == len(faelle):
                 continue
             else:
@@ -421,6 +433,100 @@ def _horizont_schreiben(verbindung: sqlite3.Connection, horizont: int, modell: M
         """,
         (horizont, json.dumps(modell.gewichte), modell.bias, modell.beispiele),
     )
+
+
+def _reihe_aus_kursen(verbindung, symbol: str, ersatz):
+    """Gespeicherte Schlüsse, wenn sie mehr Historie enthalten als die aktuelle Reihe."""
+    try:
+        zeilen = verbindung.execute(
+            "SELECT zeit, schluss FROM kurse WHERE symbol = ? AND schluss > 0 ORDER BY zeit",
+            (symbol,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return ersatz
+    if len(zeilen) < 21:
+        return ersatz
+    from kurse import Bar
+
+    gespeichert = tuple(Bar(int(zeit), None, None, None, float(schluss), float(schluss), None) for zeit, schluss in zeilen)
+    return gespeichert if len(gespeichert) >= len(tuple(ersatz or ())) else ersatz
+
+
+def _gelernte_fenster(verbindung, symbol: str, horizont: int) -> list[tuple[int, int]]:
+    zeilen = verbindung.execute(
+        """
+        SELECT b.ziel_von, b.ziel_bis FROM ki_beispiel b
+        JOIN nachrichten n ON n.id = b.nachricht_id
+        WHERE n.symbol = ? AND b.horizont = ? AND b.status = 'trainiert'
+          AND b.ziel_von IS NOT NULL AND b.ziel_bis IS NOT NULL AND b.ziel_bis > b.ziel_von
+        """,
+        (symbol, horizont),
+    ).fetchall()
+    return [(int(von), int(bis)) for von, bis in zeilen]
+
+
+def _gelernte_ereignisse(verbindung, symbol: str, horizont: int) -> set[str]:
+    zeilen = verbindung.execute(
+        """
+        SELECT n.ereignis FROM ki_beispiel b
+        JOIN nachrichten n ON n.id = b.nachricht_id
+        WHERE n.symbol = ? AND b.horizont = ? AND b.status = 'trainiert' AND n.ereignis IS NOT NULL
+        """,
+        (symbol, horizont),
+    ).fetchall()
+    return {str(name) for (name,) in zeilen if name}
+
+
+def _ueberlappt(fenster: tuple[int, int], vorhandene: list[tuple[int, int]]) -> bool:
+    von, bis = fenster
+    return any(von < alt_bis and bis > alt_von for alt_von, alt_bis in vorhandene)
+
+
+def _sperrgrund(ereignis, fenster, bekannte: set[str], vorhandene: list[tuple[int, int]]) -> str | None:
+    if ereignis and str(ereignis) in bekannte:
+        return "Dieselbe Meldung zählt einmal"
+    if fenster is not None and _ueberlappt(fenster, vorhandene):
+        return "Zielzeitraum überlappt ein früheres Beispiel"
+    return None
+
+
+def _nachholen_wenn_getrennt(verbindung, modelle, fenster_je, ereignisse, nummer: int, horizont: int, zeit: int, thema: str, bewegung, fenster, ereignis, reihe) -> bool:
+    """Eine frühere Tagessperre wird nur trainiert, wenn das Ziel nicht überlappt."""
+    zeile = verbindung.execute(
+        "SELECT status, grund FROM ki_beispiel WHERE nachricht_id = ? AND horizont = ?",
+        (nummer, horizont),
+    ).fetchone()
+    if zeile is None or zeile[0] != "ausgeschlossen" or zeile[1] != "Gleicher Kalendertag, erstes Beispiel zählt":
+        return False
+    if bewegung is None or fenster is None:
+        return False
+    grund = _sperrgrund(ereignis, fenster, ereignisse[horizont], fenster_je[horizont])
+    if grund is not None:
+        verbindung.execute(
+            "UPDATE ki_beispiel SET grund = ? WHERE nachricht_id = ? AND horizont = ? AND status = 'ausgeschlossen'",
+            (grund, nummer, horizont),
+        )
+        return False
+    try:
+        eingabe = merkmale(reihe, zeit, thema)
+    except (TypeError, ValueError):
+        return False
+    if eingabe is None:
+        return False
+    ziel = 1.0 if float(bewegung) > 0 else 0.0
+    modelle[horizont] = schritt(modelle[horizont], eingabe, ziel)
+    fenster_je[horizont].append(fenster)
+    if ereignis:
+        ereignisse[horizont].add(str(ereignis))
+    verbindung.execute(
+        """
+        UPDATE ki_beispiel
+        SET status = 'trainiert', grund = 'Trainiert auf diesem Horizont', ziel = ?, merkmale = ?, ziel_von = ?, ziel_bis = ?
+        WHERE nachricht_id = ? AND horizont = ? AND status = 'ausgeschlossen'
+        """,
+        (ziel, json.dumps(eingabe), int(fenster[0]), int(fenster[1]), nummer, horizont),
+    )
+    return True
 
 
 def _trainierte_tage(verbindung: sqlite3.Connection, symbol: str, horizont: int) -> set[int]:

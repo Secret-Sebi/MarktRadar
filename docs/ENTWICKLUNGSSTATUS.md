@@ -74,6 +74,6 @@ Hier weitermachen, nicht bei einem neuen System:
 
 ## 9. Letzter bearbeiteter Stand
 
-Zuletzt geändert: `prognose_vergleich.py`, `ki_pruefung.py`, `lernen.py`, `test_prognose_vergleich.py`.
+Zuletzt geändert: `ki.py` und `test_ki.py`. Unterschiedliche Meldungen bleiben erhalten, überlappende Ziele nicht. Eine gemessene Prüfung wird nicht gelöscht. Kein Modell ist freigegeben.
 
 Vorheriger veröffentlichter Commit: `a5134ba`.

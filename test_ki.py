@@ -1,5 +1,6 @@
 """Das Modell ändert seine Gewichte nur an abgeschlossenen Fällen."""
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -65,16 +66,118 @@ class ModellTests(unittest.TestCase):
                 ),
             )
             nachtragen(pfad, "SAP.DE", balken)
-            dritter = trainiere(pfad, "SAP.DE", balken)
-            self.assertEqual(dritter.beispiele, erster.beispiele)
+            dritter = trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            self.assertGreater(dritter.beispiele, erster.beispiele)
+            vierter = trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            self.assertEqual(vierter.beispiele, dritter.beispiele)
             self.assertEqual(lies_modell(pfad).beispiele, 0)
             with sqlite3.connect(pfad) as verbindung:
                 status = [zeile[0] for zeile in verbindung.execute(
                     "SELECT status FROM ki_beispiel WHERE horizont = 1 ORDER BY nachricht_id"
                 )]
-            self.assertEqual(status[0], "trainiert")
-            self.assertTrue(status[1:])
-            self.assertTrue(all(wert == "ausgeschlossen" for wert in status[1:]))
+            self.assertTrue(status)
+            self.assertTrue(all(wert == "trainiert" for wert in status))
+
+    def test_ueberlappende_meldung_wird_nicht_doppelt_trainiert(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            balken = _kursreihe(10, 40)
+            speichern(
+                pfad,
+                "SAP.DE",
+                aus_yahoo(
+                    {
+                        "news": [
+                            {"title": "Quartalszahlen enttäuschen", "link": "https://beispiel.test/a", "publisher": "Reuters", "providerPublishTime": 2401},
+                            {"title": "Übernahme wird gemeldet", "link": "https://beispiel.test/b", "publisher": "Reuters", "providerPublishTime": 2450},
+                        ]
+                    }
+                ),
+            )
+            nachtragen(pfad, "SAP.DE", balken)
+            trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            with sqlite3.connect(pfad) as verbindung:
+                zeilen = verbindung.execute(
+                    "SELECT status, grund FROM ki_beispiel WHERE horizont = 1 ORDER BY nachricht_id"
+                ).fetchall()
+            self.assertEqual(zeilen[0][0], "trainiert")
+            self.assertEqual(zeilen[1][0], "ausgeschlossen")
+            self.assertIn("überlappt", zeilen[1][1])
+
+    def test_alte_tagessperre_wird_nur_ohne_ueberlappung_nachgeholt(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            balken = _kursreihe(10, 40)
+            speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/alt", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            nachtragen(pfad, "SAP.DE", balken)
+            trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "Firma meldet Übernahme", "link": "https://beispiel.test/spaet", "publisher": "Reuters", "providerPublishTime": 3600}]}))
+            nachtragen(pfad, "SAP.DE", balken)
+            with sqlite3.connect(pfad) as verbindung:
+                nummer = verbindung.execute("SELECT id FROM nachrichten WHERE zeit = 3600").fetchone()[0]
+                verbindung.execute(
+                    """
+                    INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit, erfasst)
+                    VALUES (?, 1, 'ausgeschlossen', 'Gleicher Kalendertag, erstes Beispiel zählt', NULL, NULL, 3600, 1)
+                    """,
+                    (nummer,),
+                )
+            vorher = trainiere(pfad, "SAP.DE", balken, pruefen=False).beispiele
+            nochmal = trainiere(pfad, "SAP.DE", balken, pruefen=False).beispiele
+            self.assertEqual(nochmal, vorher)
+            with sqlite3.connect(pfad) as verbindung:
+                status = verbindung.execute(
+                    "SELECT status FROM ki_beispiel WHERE nachricht_id = ? AND horizont = 1",
+                    (nummer,),
+                ).fetchone()[0]
+            self.assertEqual(status, "trainiert")
+
+    def test_gemessene_pruefung_bleibt_bei_zu_wenigen_zielzeiten(self):
+        from ki import _tabellen, _validiere_wenn_faellig
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            with sqlite3.connect(pfad) as verbindung:
+                _tabellen(verbindung)
+                verbindung.execute(
+                    "INSERT INTO ki_horizont (horizont, gewichte, bias, beispiele, validiert, pruefung) VALUES (1, '[]', 0, 1, 0, ?)",
+                    ('{"bestanden": false, "grund": "Validierung schlägt die Basisrate nicht", "brier": 0.268, "basis_brier": 0.245, "n": 109}',),
+                )
+                verbindung.execute(
+                    """
+                    INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit, ziel_von, ziel_bis)
+                    VALUES (1, 1, 'trainiert', 'x', 1, '[0,0,0,0,0,0,0.4,1]', 10, 10, 20)
+                    """
+                )
+            _validiere_wenn_faellig(pfad)
+            with sqlite3.connect(pfad) as verbindung:
+                text = verbindung.execute("SELECT pruefung, validiert FROM ki_horizont WHERE horizont = 1").fetchone()
+            bericht = json.loads(text[0])
+            self.assertEqual(text[1], 0)
+            self.assertFalse(bericht["bestanden"])
+            self.assertEqual(bericht["brier"], 0.268)
+            self.assertEqual(bericht["basis_brier"], 0.245)
+
+    def test_gespeicherte_kurse_fuellen_die_zielzeit_ohne_zweites_training(self):
+        from lernen import kurse_merken
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            balken = _kursreihe(10, 40)
+            speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/reihe", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            nachtragen(pfad, "SAP.DE", balken)
+            kurse_merken(pfad, "SAP.DE", balken)
+            erster = trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute("UPDATE ki_beispiel SET ziel_von = NULL, ziel_bis = NULL")
+            zweiter = trainiere(pfad, "SAP.DE", _kursreihe(10, 5), pruefen=False)
+            self.assertEqual(zweiter.beispiele, erster.beispiele)
+            with sqlite3.connect(pfad) as verbindung:
+                fenster = verbindung.execute(
+                    "SELECT ziel_von, ziel_bis FROM ki_beispiel WHERE status = 'trainiert' AND horizont = 1"
+                ).fetchone()
+            self.assertIsNotNone(fenster[0])
+            self.assertGreater(fenster[1], fenster[0])
 
     def test_fehlende_zielzeit_wird_nachgetragen_ohne_zweites_training(self):
         with tempfile.TemporaryDirectory() as ordner:

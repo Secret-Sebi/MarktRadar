@@ -10,6 +10,10 @@ Stand: 24. November 2026.
 
 `prognose_vergleich.py` misst drei Regeln. Das ist ein technischer Vergleich, keine bessere Prognose. Die echten Horizonte wurden damit nicht neu gerechnet.
 
+## Behoben am 24. November 2026, abends
+
+Eine zweite Meldung am selben Kalendertag wird nicht mehr allein deshalb verworfen. Sie bleibt außen vor, wenn sie dieselbe Ereignis-Kennung hat oder ihr Zielzeitraum ein schon trainiertes Beispiel überlappt. Eine alte Zeile mit dem Grund „Gleicher Kalendertag, erstes Beispiel zählt“ wird beim nächsten Lauf dieses Symbols nachgeholt, wenn der Zielzeitraum frei ist. Die Zielzeit kommt aus den gespeicherten Schlüssen, wenn diese Reihe länger ist als die gerade geladene. Eine schon gemessene Prüfung mit Brier-Wert wird nicht durch „Nicht ausreichend trainiert“ ersetzt. Nichts davon gibt ein Modell frei.
+
 ## Offen
 
 1. Alte Zeilen in `daten/markt.sqlite` haben die neuen Zeiten erst, wenn das Fenster das Symbol mit einer ausreichenden Kursreihe erneut verarbeitet. Ein Massenupdate wurde nicht gestartet.
