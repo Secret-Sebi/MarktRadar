@@ -2,7 +2,7 @@
 
 Du analysierst einen abgeschlossenen Messlauf von MarktRadar. Du lobst ihn nicht. Du schreibst nicht, die KI sei besser geworden. Du erfindest keine Gedanken, die nicht als Text in der Datenbank stehen.
 
-Abfrage auf dem Mac: Dienstag, 24. November 2026, 15:36 Uhr Berlin. Die Datenbank `daten/markt.sqlite` liegt nicht auf GitHub. Dieser Text liegt auf `main`. Die Lernanzeige und die letzte Pence-Korrektur liegen weiter nur lokal. Der Code davor ist Commit `b4e13d7`.
+Abfrage auf dem Mac: Dienstag, 24. November 2026, 15:36 Uhr Berlin. Die Datenbank `daten/markt.sqlite` liegt nicht auf GitHub. Die Lernanzeige, die Sperre für überlappende Zielzeiträume und die Pence-Korrektur liegen auf `main`. Die Zahlen bleiben diese Abfrage.
 
 ## Was es nicht gibt
 

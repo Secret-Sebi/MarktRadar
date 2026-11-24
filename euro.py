@@ -20,6 +20,8 @@ _JAHR = 365 * 86400
 
 
 def nach_euro(daten: Kursdaten, wechselkurs) -> Kursdaten:
+    if daten.waehrung in _PENCE:
+        daten = _skaliere(daten, 0.01, "Pence wurden in Pfund umgerechnet.", "GBP")
     code, teiler = _basis(daten.waehrung)
     if not daten.waehrung or (code == "EUR" and teiler == 1):
         return daten
@@ -30,13 +32,19 @@ def nach_euro(daten: Kursdaten, wechselkurs) -> Kursdaten:
         historisch = _mit_reihe(daten, geliefert, teiler)
         if historisch is not None:
             return historisch
+        if _ist_pence_pfund(daten):
+            return _ohne_euro(daten, "Historische Euro-Umrechnung fehlt. Angezeigt wird Pfund, nicht Euro.")
         return daten
-    if daten.waehrung in _PENCE:
-        return _skaliere(daten, 1 / teiler, "Pence wurden in Pfund umgerechnet. Das ist kein Eurokurs.", "GBP")
+    if _ist_pence_pfund(daten):
+        return _ohne_euro(daten, "Euro-Umrechnung fehlt. Angezeigt wird Pfund, nicht Euro.")
     return _ohne_euro(
         daten,
         "Ein einzelner Wechselkurs wird nicht auf die historische Reihe angewendet. Die Ursprungswährung bleibt.",
     )
+
+
+def _ist_pence_pfund(daten: Kursdaten) -> bool:
+    return daten.waehrung == "GBP" and "Pence wurden in Pfund" in (daten.hinweis or "")
 
 
 def _mit_reihe(daten: Kursdaten, reihe, teiler: float) -> Kursdaten | None:

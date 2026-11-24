@@ -19,6 +19,29 @@ from quellen_stooq import stooq_aus_csv, stooq_kuerzel
 from suche import suche_aus_coingecko, suche_aus_yahoo
 
 
+def _pence(waehrung="GBp", kurszeit=None, start=None, ende=None):
+    erste = start or datetime.fromtimestamp(86400, _UTC)
+    zweite = ende or datetime.fromtimestamp(172800, _UTC)
+
+    def bar(moment):
+        zeit = int(moment.timestamp()) if not isinstance(moment, int) else moment
+        return Bar(zeit, 10000.0, 11000.0, 9000.0, 10000.0, 10000.0, 1.0)
+
+    return Kursdaten(
+        "HSBA.L",
+        "HSBC",
+        waehrung,
+        10000.0,
+        0.0,
+        False,
+        (10000.0, 10000.0),
+        11000.0,
+        9000.0,
+        (bar(erste), bar(zweite)),
+        kurszeit=kurszeit,
+    )
+
+
 def _reihe(start, ende, hoch=100.0, tief=100.0, kurszeit=None, zeitzone="UTC"):
     def bar(moment):
         return Bar(int(moment.timestamp()), 100.0, hoch, tief, 100.0, 100.0, 1.0)
@@ -283,12 +306,60 @@ class EuroTests(unittest.TestCase):
 
         self.assertEqual(nach_euro(_kurs(), verboten).waehrung, "EUR")
 
-    def test_pence_werden_vor_dem_wechselkurs_geteilt(self):
-        daten = Kursdaten("HSBA.L", "HSBC", "GBp", 10000.0, None, False, (10000.0,), 10000.0)
-        euro = nach_euro(daten, lambda code: 1.2 if code == "GBP" else None)
+    def test_pence_mit_historischer_reihe_werden_einmal_geteilt(self):
+        euro = nach_euro(_pence(), lambda code: ((86400, 0.8), (172800, 1.0)))
+        self.assertEqual(euro.waehrung, "EUR")
+        self.assertAlmostEqual(euro.balken[0].schluss, 80.0)
+        self.assertAlmostEqual(euro.balken[1].schluss, 100.0)
+        self.assertAlmostEqual(euro.preis, 100.0)
+        self.assertAlmostEqual(euro.tag_pct, 25.0)
+        self.assertNotAlmostEqual(euro.preis, 1.0)
+
+    def test_pence_mit_einem_tageskurs_bleiben_pfund(self):
+        euro = nach_euro(_pence(), lambda code: 1.2)
         self.assertEqual(euro.waehrung, "GBP")
         self.assertAlmostEqual(euro.preis, 100.0)
-        self.assertIn("kein Eurokurs", euro.hinweis)
+        self.assertAlmostEqual(euro.balken[0].schluss, 100.0)
+        self.assertIn("nicht Euro", euro.hinweis)
+
+    def test_pence_ohne_wechselkurs_bleiben_pfund(self):
+        for waehrung in ("GBp", "GBX"):
+            euro = nach_euro(_pence(waehrung), lambda code: None)
+            self.assertEqual(euro.waehrung, "GBP")
+            self.assertAlmostEqual(euro.preis, 100.0)
+            self.assertIn("nicht Euro", euro.hinweis)
+
+    def test_unvollstaendige_pence_reihe_bleibt_pfund(self):
+        daten = _pence()
+        euro = nach_euro(daten, lambda code: ())
+        self.assertEqual(euro.waehrung, "GBP")
+        self.assertAlmostEqual(euro.preis, 100.0)
+        einer = nach_euro(daten, lambda code: ((86400, 1.2),))
+        self.assertEqual(einer.waehrung, "GBP")
+        self.assertAlmostEqual(einer.preis, 100.0)
+        falsch = nach_euro(daten, lambda code: ((True, 1.2), ("spaeter", 1.2)))
+        self.assertEqual(falsch.waehrung, "GBP")
+        self.assertAlmostEqual(falsch.balken[0].schluss, 100.0)
+
+    def test_pence_ohne_passenden_tageskurs_bleiben_pfund(self):
+        montag = datetime(2024, 1, 8, 21, tzinfo=_UTC)
+        dienstag = datetime(2024, 1, 9, 15, tzinfo=_UTC)
+        daten = _pence(kurszeit=int(dienstag.timestamp()), start=montag - timedelta(days=1), ende=montag)
+        euro = nach_euro(
+            daten,
+            lambda code: ((int((montag - timedelta(days=1)).timestamp()), 0.8), (int(montag.timestamp()), 0.9)),
+        )
+        self.assertEqual(euro.waehrung, "GBP")
+        self.assertAlmostEqual(euro.preis, 100.0)
+        self.assertAlmostEqual(euro.balken[-1].schluss, 100.0)
+        self.assertIn("Kurszeitpunkt", euro.hinweis)
+
+    def test_zukuenftiger_pence_kurs_wird_nicht_verwendet(self):
+        euro = nach_euro(_pence(), lambda code: ((86400, 0.5), (172800 + 3600, 9.0), (172800, 1.0)))
+        self.assertEqual(euro.waehrung, "EUR")
+        self.assertAlmostEqual(euro.balken[0].schluss, 50.0)
+        self.assertAlmostEqual(euro.balken[1].schluss, 100.0)
+        self.assertNotAlmostEqual(euro.balken[1].schluss, 900.0)
 
 
 class FallbackTests(unittest.TestCase):

@@ -33,7 +33,7 @@
     background: rgba(5, 16, 12, .85); border: 1px solid rgba(61, 255, 154, .4);
     border-radius: 999px; padding: 7px 12px; min-width: 0; width: min(280px, 46vw);
   }
-  header button, .filter button, .nav button {
+  header button, .filter button, .nav button, button.mehr {
     background: transparent; border: 1px solid var(--linie); border-radius: 999px;
     padding: 6px 12px; cursor: pointer;
   }
@@ -70,6 +70,17 @@
   .zwei { display: grid; grid-template-columns: 1.4fr .8fr; gap: 12px; margin-top: 12px; }
   .balken { height: 8px; border-radius: 999px; background: rgba(233, 255, 244, .08); overflow: hidden; }
   .balken span { display: block; height: 100%; background: var(--gruen); }
+  .balken.pruefung span { background: #4da3ff; }
+  .lernzahlen { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 8px 0; }
+  .lernzahlen .kpi { cursor: default; }
+  .licht {
+    width: 10px; height: 10px; border-radius: 50%; background: #4da3ff;
+    box-shadow: 0 0 8px #4da3ff; display: inline-block; margin-right: 8px;
+    animation: puls 1.1s ease-in-out infinite;
+  }
+  .licht.ruhend { animation: none; opacity: .4; }
+  .ladezeile { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  @keyframes puls { 50% { opacity: .3; } }
   .zeile { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--linie); }
   details { margin-top: 10px; }
   summary { cursor: pointer; color: var(--gruen); }
@@ -135,6 +146,7 @@ let verbindung = "verbunden";
 let suchTimer = 0;
 let traderFilter = { status: "alle", sort: "name", richtung: "ab" };
 let zeit = "alles";
+let lernOffen = false;
 
 function text(knoten, wert) { knoten.textContent = wert == null || wert === "" ? "" : String(wert); }
 function el(name, klasse) {
@@ -219,7 +231,11 @@ function aktienKarte(zeile) {
   const karte = el("button", "karte " + richtungKlasse(zeile));
   karte.type = "button";
   const name = el("h2");
-  text(name, zeile.name || zeile.symbol);
+  const analyse = sichtAnalyse(zeile);
+  if (analyse === "laeuft" || analyse === "warteschlange") name.append(ladePunkt(analyse === "laeuft"));
+  const schrift = el("span");
+  text(schrift, zeile.name || zeile.symbol);
+  name.append(schrift);
   const symbol = el("div", "symbol");
   text(symbol, zeile.symbol);
   const preis = el("div", "preis");
@@ -227,7 +243,6 @@ function aktienKarte(zeile) {
   const tag = el("div", richtungKlasse(zeile) === "hoch" ? "plus" : richtungKlasse(zeile) === "runter" ? "minus" : "ruhig");
   text(tag, zahl(zeile.tag_wert) ? zeile.tag : LEER);
   const chips = el("div", "chips");
-  const analyse = sichtAnalyse(zeile);
   chips.append(datenChip(zeile), chip(analyseWort(analyse), analyse === "abgeschlossen" ? "plus" : "warn"), chip("Nicht validiert", "warn"));
   karte.append(name, symbol, preis, tag, spark(zeile.reihe), chips);
   karte.addEventListener("click", function () { detail = { art: "aktie", id: zeile.symbol }; zeichnen(standJetzt); });
@@ -320,12 +335,39 @@ function zeitWahl(block) {
   block.append(leiste);
 }
 
+function ladePunkt(aktiv) {
+  return el("span", aktiv ? "licht" : "licht ruhend");
+}
+
+function abrufZeilen(zeile) {
+  const lauf = (standJetzt && standJetzt.lauf) || {};
+  const aktiv = !!(lauf.misst && lauf.symbol === zeile.symbol);
+  if (!aktiv) return el("div");
+  const block = el("section", "panel");
+  const titel = el("h2");
+  text(titel, "Abruf");
+  block.append(titel);
+  ["Kurs", "Nachrichten", "Späterer Kurs"].forEach(function (name) {
+    const zeileText = el("div", "ladezeile");
+    zeileText.append(ladePunkt(true));
+    const satz = el("span");
+    text(satz, name + " wird gerade geholt");
+    zeileText.append(satz);
+    block.append(zeileText);
+  });
+  return block;
+}
+
 function fortschritt(block) {
+  const lauf = (standJetzt && standJetzt.lauf) || {};
   (standJetzt.bild || []).forEach(function (zeile) {
     if (!zeile || !zeile.von) return;
     const kasten = el("div", "panel");
-    const name = el("div");
-    text(name, zeile.name + " " + zeile.wert + " / " + zeile.von);
+    const name = el("div", "ladezeile");
+    if (lauf.arbeitet) name.append(ladePunkt(!!lauf.misst));
+    const schrift = el("span");
+    text(schrift, zeile.name + " " + zeile.wert + " / " + zeile.von);
+    name.append(schrift);
     const spur = el("div", "balken");
     const fuell = el("span");
     fuell.style.width = Math.max(0, Math.min(100, (zeile.wert / zeile.von) * 100)) + "%";
@@ -333,6 +375,58 @@ function fortschritt(block) {
     kasten.append(name, spur);
     block.append(kasten);
   });
+}
+
+function lernDiagramm() {
+  const lernen = (standJetzt && standJetzt.lernen) || {};
+  const abschnitt = lernen.abschnitte || {};
+  const block = el("section", "panel");
+  const titel = el("h2");
+  text(titel, "Lernstand");
+  const satz = el("p", "ruhig");
+  text(satz, "Einheit: Beispiele. Ein Beispiel ist eine gespeicherte Übung an einer Meldung. Das ist keine bestandene Prüfung.");
+  const reihe = el("div", "kpi-reihe lernzahlen");
+  [["Gesamt", abschnitt.gesamt], ["Heute", abschnitt.heute], ["Seit einer Woche", abschnitt.woche], ["Seit einem Monat", abschnitt.monat]].forEach(function (paar) {
+    const kasten = el("div", "kpi");
+    const name = el("span");
+    const wert = el("strong");
+    text(name, paar[0]);
+    text(wert, paar[1] == null ? LEER : String(paar[1]));
+    kasten.append(name, wert);
+    reihe.append(kasten);
+  });
+  block.append(titel, satz, reihe);
+  if (lernen.freigabe) {
+    const frei = el("p");
+    text(frei, lernen.freigabe);
+    block.append(frei);
+  }
+  if (abschnitt.ohne_zeit) {
+    const alt = el("p", "ruhig");
+    text(alt, abschnitt.ohne_zeit + " ältere Beispiele haben keinen Zeitpunkt. Sie zählen nur bei Gesamt.");
+    block.append(alt);
+  }
+  const detail = el("div");
+  detail.hidden = !lernOffen;
+  (lernen.pruefung || []).forEach(function (zeile) {
+    const name = el("div");
+    text(name, zeile.name + " " + zeile.wert + " / " + zeile.von + ". " + (zeile.satz || ""));
+    const spur = el("div", "balken pruefung");
+    const fuell = el("span");
+    fuell.style.width = Math.max(0, Math.min(100, zeile.von ? (zeile.wert / zeile.von) * 100 : 0)) + "%";
+    spur.append(fuell);
+    detail.append(name, spur);
+  });
+  const mehr = el("button", "mehr");
+  mehr.type = "button";
+  text(mehr, lernOffen ? "Weniger" : "Mehr");
+  mehr.addEventListener("click", function () {
+    lernOffen = !lernOffen;
+    detail.hidden = !lernOffen;
+    text(mehr, lernOffen ? "Weniger" : "Mehr");
+  });
+  block.append(mehr, detail);
+  return block;
 }
 
 function lueckenSatz() {
@@ -505,7 +599,7 @@ function dashboard() {
   const hinweis = el("p", "ruhig");
   const zaehl = function (code) { return aktien.filter(function (zeile) { return zeile.analyse === code; }).length; };
   text(hinweis, "Vollständig " + zaehl("abgeschlossen") + ", teilweise " + zaehl("teilweise") + ", fehlgeschlagen " + zaehl("fehlgeschlagen") + ". Ein Kurs ist keine vollständige Analyse. Validierte Chancen: " + (chancen ? String(chancen) : LEER) + ".");
-  block.append(hinweis, lueckenSatz(), ereignisListe((standJetzt && standJetzt.ereignisse) || [], 3));
+  block.append(hinweis, lueckenSatz(), lernDiagramm(), ereignisListe((standJetzt && standJetzt.ereignisse) || [], 3));
   block.append(diagramm("Gesamtperformance", zentrale().gesamt, zentrale().hinweis));
   const raster = el("div", "raster");
   const bewegung = aktien.filter(function (zeile) { return zeile.lage === "analysiert" && zahl(zeile.tag_wert); })
@@ -783,6 +877,7 @@ function aktienDetail(zeile) {
       if (meldung.symbol === zeile.symbol) meldungen.push(meldung);
     });
   });
+  block.append(abrufZeilen(zeile));
   block.append(faktorenListe(zeile));
   block.append(ereignisListe(((standJetzt && standJetzt.ereignisse) || []).filter(function (eintrag) {
     return eintrag.symbol === zeile.symbol;

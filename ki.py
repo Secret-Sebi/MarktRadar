@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -341,7 +342,7 @@ def _validiere_wenn_faellig(pfad: Path, erzwingen: bool = False) -> None:
             elif not erzwingen and isinstance(vorher.get("zeit"), int) and time.time() - vorher["zeit"] < 900 and vorher.get("n") == len(faelle):
                 continue
             else:
-                bericht = pruefe_faelle(faelle)
+                bericht = pruefe_faelle(faelle, horizont * 3 * 86400)
             bericht["zeit"] = int(time.time())
             gewichte = bericht.pop("gewichte", None)
             bias = bericht.pop("bias", None)
@@ -411,11 +412,11 @@ def _beispiel_vorhanden(verbindung: sqlite3.Connection, nummer: int, horizont: i
     return zeile is not None
 
 
-def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, grund: str, ziel, eingabe) -> None:
+def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, grund: str, ziel, eingabe, erfasst: int | None = None) -> None:
     verbindung.execute(
         """
-        INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, ziel, merkmale, zeit, erfasst)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             nummer,
@@ -425,6 +426,7 @@ def _beispiel(verbindung, nummer: int, horizont: int, zeit: int, status: str, gr
             ziel,
             None if eingabe is None else json.dumps(eingabe),
             zeit,
+            int(time.time()) if erfasst is None else int(erfasst),
         ),
     )
 
@@ -464,10 +466,14 @@ def _tabellen(verbindung: sqlite3.Connection) -> None:
             ziel REAL,
             merkmale TEXT,
             zeit INTEGER NOT NULL,
+            erfasst INTEGER,
             PRIMARY KEY (nachricht_id, horizont)
         )
         """
     )
+    spalten_beispiel = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(ki_beispiel)")}
+    if spalten_beispiel and "erfasst" not in spalten_beispiel:
+        verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN erfasst INTEGER")
     spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(nachrichten)")}
     if spalten and "ki_genutzt" not in spalten:
         verbindung.execute("ALTER TABLE nachrichten ADD COLUMN ki_genutzt INTEGER NOT NULL DEFAULT 0")

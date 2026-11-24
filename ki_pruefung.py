@@ -12,7 +12,11 @@ _TEST = 36
 _CLIP = 1e-6
 
 
-def pruefe_faelle(faelle: tuple[tuple[int, tuple[float, ...], float], ...]) -> dict:
+def pruefe_faelle(faelle: tuple[tuple[int, tuple[float, ...], float], ...], sperre: int = 0) -> dict:
+    """Sperre ist der Mindestabstand in Sekunden bis das Ziel bekannt sein kann.
+
+    Drei Kalendertage je Handelstag sind ein Puffer, kein Börsenkalender.
+    """
     geordnet = tuple(sorted(faelle, key=lambda fall: fall[0]))
     if len(geordnet) < _TRAIN + _VAL + _TEST:
         return _leer(len(geordnet), "Nicht ausreichend trainiert")
@@ -21,6 +25,11 @@ def pruefe_faelle(faelle: tuple[tuple[int, tuple[float, ...], float], ...]) -> d
     train = geordnet[:-(_TEST + _VAL)]
     if test[0][0] <= val[-1][0] or val[0][0] <= train[-1][0]:
         return _leer(len(geordnet), "Testfälle liegen nicht nach der Prüfung")
+    if sperre > 0:
+        train = tuple(fall for fall in train if fall[0] + sperre <= val[0][0])
+        val = tuple(fall for fall in val if fall[0] + sperre <= test[0][0])
+        if len(train) < _TRAIN or len(val) < _VAL:
+            return _leer(len(geordnet), "Zielzeitraum reicht in die nächste Prüfung")
     basis = _rate(train)
     val_modell = _fit(train)
     if not _besser(val_modell, val, basis):
@@ -30,7 +39,10 @@ def pruefe_faelle(faelle: tuple[tuple[int, tuple[float, ...], float], ...]) -> d
         block = fenster[start:start + _VAL]
         if len(block) < _VAL or block[0][0] <= fenster[start - 1][0]:
             continue
-        if not _besser(_fit(fenster[:start]), block, _rate(fenster[:start])):
+        vorher = tuple(fall for fall in fenster[:start] if sperre <= 0 or fall[0] + sperre <= block[0][0])
+        if len(vorher) < _TRAIN:
+            return _bericht(False, len(geordnet), "Zielzeitraum reicht in die nächste Prüfung", val_modell, test, basis)
+        if not _besser(_fit(vorher), block, _rate(vorher)):
             return _bericht(False, len(geordnet), "Walk-forward schlägt die Basisrate nicht", val_modell, test, basis)
     kandidat = _fit(fenster)
     if not _besser(kandidat, test, _rate(fenster)):

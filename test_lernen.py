@@ -243,6 +243,82 @@ class WirkungTests(unittest.TestCase):
                 namen = {zeile[0] for zeile in verbindung.execute("SELECT symbol FROM nachrichten")}
             self.assertEqual(namen, {"SAP.DE", "ALV.DE"})
 
+    def test_pruefbalken_zaehlen_beispiele_und_nicht_einen_lernanteil(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            stand = fortschritt(Path(ordner) / "markt.sqlite")
+        self.assertEqual(len(stand["pruefung"]), 5)
+        self.assertEqual(stand["pruefung"][0]["von"], 108)
+        self.assertIn("Nicht gelernt", stand["pruefung"][0]["satz"])
+        self.assertEqual(stand["pruefung"][-1]["von"], 36)
+        self.assertNotIn("%", "".join(zeile["satz"] for zeile in stand["pruefung"]))
+        self.assertEqual(stand["abschnitte"]["einheit"], "Beispiele")
+        self.assertEqual(stand["abschnitte"]["gesamt"], 0)
+
+    def test_abschnitte_trennen_heute_woche_und_monat(self):
+        import time
+
+        from lernen import _lern_abschnitte
+
+        jetzt = int(time.time())
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    """
+                    CREATE TABLE ki_beispiel (
+                        nachricht_id INTEGER NOT NULL,
+                        horizont INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        grund TEXT NOT NULL,
+                        ziel REAL,
+                        merkmale TEXT,
+                        zeit INTEGER NOT NULL,
+                        erfasst INTEGER,
+                        PRIMARY KEY (nachricht_id, horizont)
+                    )
+                    """
+                )
+                verbindung.executemany(
+                    "INSERT INTO ki_beispiel (nachricht_id, horizont, status, grund, zeit, erfasst) VALUES (?, 1, 'trainiert', '', ?, ?)",
+                    (
+                        (1, jetzt, jetzt),
+                        (2, jetzt - 3 * 86400, jetzt - 3 * 86400),
+                        (3, jetzt - 20 * 86400, jetzt - 20 * 86400),
+                        (4, jetzt - 40 * 86400, None),
+                    ),
+                )
+            stand = _lern_abschnitte(pfad, jetzt)
+        self.assertEqual(stand["gesamt"], 4)
+        self.assertEqual(stand["heute"], 1)
+        self.assertEqual(stand["woche"], 2)
+        self.assertEqual(stand["monat"], 3)
+        self.assertEqual(stand["ohne_zeit"], 1)
+
+    def test_bestandene_pruefung_wird_nicht_als_offen_bezeichnet(self):
+        from lernen import _pruefung_balken
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            with sqlite3.connect(pfad) as verbindung:
+                verbindung.execute(
+                    """
+                    CREATE TABLE ki_horizont (
+                        horizont INTEGER PRIMARY KEY,
+                        beispiele INTEGER NOT NULL,
+                        validiert INTEGER NOT NULL,
+                        pruefung TEXT NOT NULL
+                    )
+                    """
+                )
+                verbindung.execute(
+                    "INSERT INTO ki_horizont (horizont, beispiele, validiert, pruefung) VALUES (1, 181, 0, ?)",
+                    ('{"grund": "Validierung schlägt die Basisrate nicht", "brier": 0.374, "basis_brier": 0.222}',),
+                )
+            balken = _pruefung_balken(pfad)
+        self.assertIn("nicht bestanden", balken[0]["satz"])
+        self.assertIn("Basisrate", balken[0]["satz"])
+        self.assertIn("Nicht freigegeben", balken[0]["satz"])
+
 
 class AbrufTests(unittest.TestCase):
     def test_fehlschlag_und_leere_quelle_werden_unterschieden(self):

@@ -513,7 +513,8 @@ def aktion_aus_verkauf(aktion: str, eigene: int, median: float | None, daten_ok:
 def fortschritt(pfad: Path) -> dict:
     if not pfad.exists():
         stand = _lernstand(0, 0, 0, 0, 0, 0)
-        stand.update(trainiert=0, ausgeschlossen=0, trainingsfehler=0, freigegeben=[], horizonte="Kein Horizont ist freigegeben.")
+        balken = _pruefung_balken(None)
+        stand.update(trainiert=0, ausgeschlossen=0, trainingsfehler=0, freigegeben=[], horizonte="Kein Horizont ist freigegeben.", pruefung=balken, freigabe=_freigabe_text(balken), abschnitte=_lern_abschnitte(None))
         return stand
     with sqlite3.connect(pfad) as verbindung:
         _tabelle(verbindung)
@@ -538,7 +539,96 @@ def fortschritt(pfad: Path) -> dict:
             f"Trainiert {bild['trainiert']}, ausgeschlossen {bild['ausgeschlossen']}, "
             f"Fehler {bild['fehler']}. Kein Horizont ist freigegeben."
         )
+    stand["pruefung"] = _pruefung_balken(pfad)
+    stand["freigabe"] = _freigabe_text(stand["pruefung"])
+    stand["abschnitte"] = _lern_abschnitte(pfad)
     return stand
+
+
+def _lern_abschnitte(pfad: Path | None, jetzt: int | None = None) -> dict:
+    """Gespeicherte Übungen. Der Zeitpunkt gilt nur, wenn er mitgeschrieben wurde."""
+    moment = int(time.time()) if jetzt is None else int(jetzt)
+    tag = datetime.fromtimestamp(moment, BERLIN)
+    heute = int(datetime(tag.year, tag.month, tag.day, tzinfo=tag.tzinfo).timestamp())
+    stand = {"einheit": "Beispiele", "gesamt": 0, "heute": 0, "woche": 0, "monat": 0, "ohne_zeit": 0}
+    if pfad is None or not pfad.exists():
+        return stand
+    with sqlite3.connect(pfad) as verbindung:
+        tabellen = {str(zeile[0]) for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "ki_beispiel" not in tabellen:
+            return stand
+        spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(ki_beispiel)")}
+        if "erfasst" not in spalten:
+            verbindung.execute("ALTER TABLE ki_beispiel ADD COLUMN erfasst INTEGER")
+
+        def zahl(bedingung: str, grenze: int | None = None) -> int:
+            if grenze is None:
+                zeile = verbindung.execute(f"SELECT COUNT(*) FROM ki_beispiel WHERE {bedingung}").fetchone()
+            else:
+                zeile = verbindung.execute(f"SELECT COUNT(*) FROM ki_beispiel WHERE {bedingung}", (grenze,)).fetchone()
+            return int(zeile[0] or 0)
+
+        stand["gesamt"] = zahl("status = 'trainiert'")
+        stand["heute"] = zahl("status = 'trainiert' AND erfasst >= ?", heute)
+        stand["woche"] = zahl("status = 'trainiert' AND erfasst >= ?", moment - 7 * 86400)
+        stand["monat"] = zahl("status = 'trainiert' AND erfasst >= ?", moment - 30 * 86400)
+        stand["ohne_zeit"] = zahl("status = 'trainiert' AND erfasst IS NULL")
+    return stand
+
+
+def _pruefung_balken(pfad: Path | None) -> tuple[dict, ...]:
+    """Beispiele bis die Prüfung starten kann. Das ist kein Lernanteil."""
+    schwelle = 108
+    staende = {horizont: (0, 0, {}) for horizont in (1, 3, 5, 20)}
+    trader_zu = 0
+    if pfad is not None and pfad.exists():
+        with sqlite3.connect(pfad) as verbindung:
+            tabellen = {str(zeile[0]) for zeile in verbindung.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "ki_horizont" in tabellen:
+                for horizont, beispiele, validiert, text in verbindung.execute("SELECT horizont, beispiele, validiert, pruefung FROM ki_horizont"):
+                    try:
+                        pruefung = json.loads(text) if text else {}
+                    except json.JSONDecodeError:
+                        pruefung = {}
+                    staende[int(horizont)] = (int(beispiele or 0), int(validiert or 0), pruefung if isinstance(pruefung, dict) else {})
+            if "ki_haendler_fall" in tabellen:
+                trader_zu = int(verbindung.execute("SELECT SUM(ausstieg IS NOT NULL) FROM ki_haendler_fall").fetchone()[0] or 0)
+    balken = []
+    for horizont, werte in staende.items():
+        balken.append({"name": f"{horizont} Handelstage", "wert": werte[0], "von": schwelle, "satz": _pruef_satz(werte[1], werte[0], schwelle, werte[2])})
+    balken.append(
+        {
+            "name": "Abgeschlossene Trader-Fälle",
+            "wert": trader_zu,
+            "von": 36,
+            "satz": "Je Trader nötig, bevor eine Regel ersetzt werden darf. Nichts übernommen.",
+        }
+    )
+    return tuple(balken)
+
+
+def _pruef_satz(validiert: int, beispiele: int, schwelle: int, pruefung: dict) -> str:
+    if validiert:
+        return "Freigegeben."
+    grund = str(pruefung.get("grund") or "")
+    if beispiele < schwelle or not grund or grund == "Nicht ausreichend trainiert":
+        return "Bis die Prüfung starten kann. Nicht gelernt."
+    brier = pruefung.get("brier")
+    basis = pruefung.get("basis_brier")
+    vergleich = ""
+    if isinstance(brier, (int, float)) and isinstance(basis, (int, float)):
+        vergleich = f" Brier {brier:.3f}, Basis {basis:.3f}."
+    return f"Prüfung nicht bestanden: {grund}.{vergleich} Nicht freigegeben."
+
+
+def _freigabe_text(balken) -> str:
+    horizonte = tuple(zeile for zeile in balken if str(zeile.get("name", "")).endswith("Handelstage"))
+    if any(zeile["satz"] == "Freigegeben." for zeile in horizonte):
+        namen = ", ".join(zeile["name"] for zeile in horizonte if zeile["satz"] == "Freigegeben.")
+        return f"Freigegeben: {namen}."
+    if any("nicht bestanden" in zeile["satz"] for zeile in horizonte):
+        return "Die Prüfung ist gelaufen. Kein Horizont ist freigegeben."
+    return "Kein Horizont ist freigegeben."
 
 
 def einfluss(

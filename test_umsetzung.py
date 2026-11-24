@@ -32,6 +32,15 @@ class UmsetzungTests(unittest.TestCase):
     def test_konstante_reihe_besteht_nicht(self):
         self.assertFalse(pruefe_faelle(tuple(_fall(index, 1) for index in range(120)))["bestanden"])
 
+    def test_ueberlappender_zielzeitraum_besteht_nicht(self):
+        bericht = pruefe_faelle(tuple(_fall(index, index % 2) for index in range(120)), sperre=10)
+        self.assertFalse(bericht["bestanden"])
+        self.assertEqual(bericht["grund"], "Zielzeitraum reicht in die nächste Prüfung")
+
+    def test_abstand_groesser_als_die_sperre_kann_bestehen(self):
+        bericht = pruefe_faelle(tuple(_fall(index * 11, index % 2) for index in range(120)), sperre=10)
+        self.assertTrue(bericht["bestanden"], bericht["grund"])
+
     def test_leere_fundamentalantwort_ist_nicht_verfuegbar_und_fehler_werden_nicht_gehalten(self):
         _CACHE.clear()
         with patch("fundamental._lesen", return_value='{"quoteSummary":{"result":[{}]}}'):
