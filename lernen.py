@@ -650,7 +650,16 @@ def _pruef_satz(validiert: int, beispiele: int, schwelle: int, pruefung: dict) -
     if isinstance(brier, (int, float)) and isinstance(basis, (int, float)):
         vergleich = f" Brier {brier:.3f}, Basis {basis:.3f}."
     bereich = " Das ist die Validierung, nicht der Test." if pruefung.get("gemessen") == "validierung" else ""
-    return f"Prüfung nicht bestanden: {grund}.{vergleich} Nicht freigegeben.{bereich}"
+    return f"Prüfung nicht bestanden: {grund}.{vergleich} Nicht freigegeben.{bereich}{_vergleich_zusatz(pruefung)}"
+
+
+def _vergleich_zusatz(pruefung: dict) -> str:
+    vergleich = pruefung.get("vergleich")
+    if not isinstance(vergleich, dict) or not vergleich.get("modelle"):
+        return ""
+    if vergleich.get("freigegeben"):
+        return " Vergleich: nur die bestandene Logistik ist freigegeben."
+    return " Vergleich von konstant, Momentum und Logistik: nichts freigegeben."
 
 
 def _trader_balken(name: str, offen: int, zu: int) -> dict:

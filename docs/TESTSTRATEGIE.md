@@ -12,7 +12,7 @@ Python ist `/usr/bin/python3`, Version 3.9.6. Neue Annotationen brauchen `from _
 
 ## Letzter Lauf
 
-24. November 2026: 228 Tests, 19,259 Sekunden, alle bestanden, 0 fehlgeschlagen, 0 übersprungen.
+24. November 2026, nach dem Modellvergleich: 232 Tests, 19,171 Sekunden, alle bestanden, 0 fehlgeschlagen, 0 übersprungen.
 
 Vor der Korrektur ist `test_fehlende_zielzeit_wird_nachgetragen_ohne_zweites_training` fehlgeschlagen. Nach dem Entfernen des frühen `continue` ist derselbe Test bestanden. Der Gesamtlauf danach war grün.
 
@@ -28,6 +28,8 @@ Vor der Korrektur ist `test_fehlende_zielzeit_wird_nachgetragen_ohne_zweites_tra
 - Pence hängt nicht am Hinweistext
 - Ein Schritt ist nur „läuft“, wenn das Backend das meldet
 - `aktion_aus_ki()` lässt die Aktion unverändert
+- Konstant, Momentum und Logistik werden verglichen, ohne den Test bei fehlender Validierung zu öffnen
+- Eine bestandene Logistik gibt Momentum und die Konstante nicht frei
 
 ## Was sie nicht prüfen
 

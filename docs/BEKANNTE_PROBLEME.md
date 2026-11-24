@@ -6,6 +6,10 @@ Stand: 24. November 2026.
 
 `trainiere()` hat vorhandene `ki_beispiel`-Zeilen sofort übersprungen. Der Nachtrag von `ziel_von` und `ziel_bis` stand dahinter und lief nie. Regressionstest: `test_ki.ModellTests.test_fehlende_zielzeit_wird_nachgetragen_ohne_zweites_training`.
 
+## Vergleich, der keine Qualität beweist
+
+`prognose_vergleich.py` misst drei Regeln. Das ist ein technischer Vergleich, keine bessere Prognose. Die echten Horizonte wurden damit nicht neu gerechnet.
+
 ## Offen
 
 1. Alte Zeilen in `daten/markt.sqlite` haben die neuen Zeiten erst, wenn das Fenster das Symbol mit einer ausreichenden Kursreihe erneut verarbeitet. Ein Massenupdate wurde nicht gestartet.
