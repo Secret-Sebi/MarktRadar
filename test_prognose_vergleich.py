@@ -14,7 +14,7 @@ def _merkmal(index: int, ziel: int, letztes: int):
 class VergleichTests(unittest.TestCase):
     def test_konstante_reihe_oeffnet_den_test_nicht(self):
         faelle = tuple(_merkmal(index, 1, 0) for index in range(72))
-        bericht = vergleiche(faelle[:36], faelle[36:], tuple(), test_offen=False)
+        bericht = vergleiche(faelle[:36], faelle[36:], (), test_offen=False)
         self.assertFalse(bericht["freigegeben"])
         self.assertIn("random_forest", bericht["nicht_implementiert"])
         self.assertIn("gradient_boosting", bericht["nicht_implementiert"])

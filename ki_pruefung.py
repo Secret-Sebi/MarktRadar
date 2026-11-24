@@ -77,7 +77,7 @@ def _wiederholung(geordnet, gehalten_bis: int, ohne: int, testen: bool) -> dict:
     modell = _fit(train)
     messung = _messung(modell, val, basis)
     if not _besser(modell, val, basis):
-        return _mit_vergleich(_abschluss(False, len(vorher), "Validierung schlägt die Basisrate nicht", messung, None, _ende(train[-1]), gehalten_bis, ohne), train, val, tuple(), False)
+        return _mit_vergleich(_abschluss(False, len(vorher), "Validierung schlägt die Basisrate nicht", messung, None, _ende(train[-1]), gehalten_bis, ohne), train, val, (), False)
     test = tuple(fall for fall in geordnet if _anfang(fall) >= gehalten_bis)
     if not testen or len(test) < _TEST or not _danach(val, test):
         return _mit_vergleich(_abschluss(False, len(vorher), "Test bleibt gehalten. Keine erneute Testwertung.", messung, None, _ende(train[-1]), gehalten_bis, ohne), train, val, test, False)
