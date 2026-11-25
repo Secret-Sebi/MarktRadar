@@ -553,7 +553,7 @@ class KritischePapierTests(unittest.TestCase):
                 verkauf = _zeile()
                 verkauf.preis = 90
                 nach_runde(pfad, (verkauf,), lambda _anfrage, timeout=12: None, lambda _code: Decimal("0.9"), moment, liste=("AAPL",))
-                self.assertEqual(lies_modell(pfad).beispiele, 13)
+                self.assertEqual(lies_modell(pfad).beispiele, 12)
                 with sqlite3.connect(pfad) as verbindung:
                     zeile = verbindung.execute("SELECT ausstieg, gelernt FROM paper_faelle WHERE konto = 'KI'").fetchone()
                 self.assertIsNotNone(zeile[0])

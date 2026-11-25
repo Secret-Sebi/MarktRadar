@@ -838,10 +838,10 @@ def kurse_merken(pfad: Path, symbol: str, balken, hat_bereinigt: bool = False) -
             if alt is None:
                 verbindung.execute(
                     """
-                    INSERT INTO kurse (symbol, zeit, schluss, bereinigt, sitzungsende, kontaminiert)
-                    VALUES (?, ?, ?, ?, ?, 0)
+                    INSERT INTO kurse (symbol, zeit, schluss, bereinigt, sitzungsende, kontaminiert, beleg)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
                     """,
-                    (symbol_name, zeit, schluss, wert, ende),
+                    (symbol_name, zeit, schluss, wert, ende, "nachgewiesen" if ende is not None else "nicht_nachgewiesen"),
                 )
                 continue
             if abs(float(alt[0]) - schluss) > 1e-8:
@@ -1034,6 +1034,14 @@ def _tabelle(verbindung: sqlite3.Connection) -> None:
         verbindung.execute("ALTER TABLE kurse ADD COLUMN sitzungsende INTEGER")
     if "kontaminiert" not in kursspalten:
         verbindung.execute("ALTER TABLE kurse ADD COLUMN kontaminiert INTEGER NOT NULL DEFAULT 0")
+    if "beleg" not in kursspalten:
+        verbindung.execute("ALTER TABLE kurse ADD COLUMN beleg TEXT")
+    verbindung.execute(
+        "UPDATE kurse SET beleg = 'nachgewiesen' WHERE sitzungsende IS NOT NULL AND beleg IS NULL"
+    )
+    verbindung.execute(
+        "UPDATE kurse SET beleg = 'nicht_nachgewiesen' WHERE sitzungsende IS NULL AND beleg IS NULL"
+    )
     verbindung.execute(
         """
         CREATE TABLE IF NOT EXISTS kurse_aenderung (

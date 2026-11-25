@@ -724,3 +724,23 @@ class HaendlerTests(unittest.TestCase):
         )
         ergebnis = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
         self.assertEqual(ergebnis.returncode, 0, ergebnis.stderr)
+
+
+class AbschlussOhneLernfallTests(unittest.TestCase):
+    def test_verkauf_ohne_offenen_fall_wird_nicht_trainiert(self):
+        from haendler import _fall_zu, _tabellen
+
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            _tabellen(pfad)
+            position = {"einstieg": "100", "menge": "1"}
+            _fall_zu(pfad, "Krypto", "ETH-USD", position, Decimal(90))
+            _fall_zu(pfad, "Krypto", "ETH-USD", position, Decimal(90))
+            with sqlite3.connect(pfad) as verbindung:
+                zeilen = verbindung.execute(
+                    "SELECT gelernt, merkmale, ausstieg FROM ki_haendler_fall"
+                ).fetchall()
+            self.assertEqual(len(zeilen), 1)
+            self.assertEqual(zeilen[0][0], 0)
+            self.assertEqual(zeilen[0][1], "[]")
+            self.assertEqual(zeilen[0][2], "90")

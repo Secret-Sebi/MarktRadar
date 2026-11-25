@@ -876,6 +876,36 @@ def _fall_zu(pfad, name: str, symbol: str, position: dict, preis: Decimal) -> No
             (name, symbol),
         ).fetchone()
         if zeile is None:
+            schon = verbindung.execute(
+                """
+                SELECT id FROM ki_haendler_fall
+                WHERE haendler = ? AND symbol = ? AND einstieg = ? AND ausstieg = ?
+                """,
+                (name, symbol, str(einstieg), str(preis)),
+            ).fetchone()
+            if schon is not None:
+                return
+            verbindung.execute(
+                """
+                INSERT INTO ki_haendler_fall
+                (haendler, symbol, horizont, merkmale, einstieg, ausstieg, ergebnis, kosten, benchmark, quelle, gelernt, zeit, brutto, gebuehr_einstieg, gebuehr_ausstieg, spread, slippage, ausstieg_zeit, menge)
+                VALUES (?, ?, '', '[]', ?, ?, ?, ?, 'nicht gemessen', 'simulation', 0, ?, ?, ?, ?, 'nicht gemessen', 'nicht gemessen', ?, ?)
+                """,
+                (
+                    name,
+                    symbol,
+                    str(einstieg),
+                    str(preis),
+                    str(netto),
+                    "Abschluss ohne offenen Lernfall. Nicht trainiert. Annahme 0,125 Prozent vom Einstieg und 0,125 Prozent vom Ausstieg. Spread und Slippage nicht gemessen.",
+                    _jetzt(),
+                    str(brutto),
+                    str(ein),
+                    str(aus),
+                    _jetzt(),
+                    str(menge),
+                ),
+            )
             return
         verbindung.execute(
             """
@@ -2017,6 +2047,14 @@ def pruefe(pfad, name: str) -> dict:
             """,
             (name,),
         ).fetchall()
+        alte_grenze = verbindung.execute(
+            """
+            SELECT test_ab FROM ki_haendler_pruefung
+            WHERE haendler = ? AND test_ab IS NOT NULL ORDER BY id DESC LIMIT 1
+            """,
+            (name,),
+        ).fetchone()
+    grenze_id = int(alte_grenze[0]) if alte_grenze and isinstance(alte_grenze[0], int) else None
     faelle = []
     for nummer, merkmale, ergebnis, zeit, ausstieg_zeit, einstieg, menge, symbol in zeilen:
         try:
@@ -2044,20 +2082,31 @@ def pruefe(pfad, name: str) -> dict:
         _pruefung_speichern(pfad, name, bericht)
         return bericht
     faelle.sort(key=lambda fall: (_fall_zeit(fall), fall["id"]))
-    if len(faelle) < 36:
+    fest = next((fall for fall in faelle if fall["id"] == grenze_id), None) if grenze_id is not None else None
+    if len(faelle) < 36 and fest is None:
         bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Weniger als 36 abgeschlossene Fälle für Training, Prüfung und Test.", "test_n": len(faelle)}
         _pruefung_speichern(pfad, name, bericht)
         return bericht
-    drittel = len(faelle) // 3
-    training = faelle[:drittel]
-    validierung = faelle[drittel:drittel * 2]
-    test = faelle[drittel * 2:]
+    if fest is not None:
+        grenze = _fall_zeit(fest)
+        test = [fall for fall in faelle if grenze is not None and _fall_zeit(fall) >= grenze]
+        vorher = [fall for fall in faelle if grenze is not None and _fall_zeit(fall) < grenze]
+        mitte = len(vorher) // 2
+        training = vorher[:mitte]
+        validierung = vorher[mitte:]
+    else:
+        drittel = len(faelle) // 3
+        training = faelle[:drittel]
+        validierung = faelle[drittel:drittel * 2]
+        test = faelle[drittel * 2:]
     if (
-        not validierung
+        not training
+        or not validierung
+        or not test
         or _fall_zeit(test[0]) <= _fall_zeit(validierung[-1])
         or _fall_zeit(validierung[0]) <= _fall_zeit(training[-1])
     ):
-        bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Testfälle liegen nicht nach der Prüfung.", "test_n": len(test)}
+        bericht = {"besser": False, "status": "Nicht ausreichend Daten", "grund": "Testfälle liegen nicht nach der Prüfung.", "test_n": len(test), "test_ab": grenze_id if fest is not None else None}
         _pruefung_speichern(pfad, name, bericht)
         return bericht
     from ki import Modell, schritt, wahrscheinlichkeit

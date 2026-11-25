@@ -74,6 +74,6 @@ Hier weitermachen, nicht bei einem neuen System:
 
 ## 9. Letzter bearbeiteter Stand
 
-Zuletzt geändert: Kerzenzeit in `kurse.py`, `ki.py`, `lernen.py`, `euro.py`. Der Tagesschluss gilt erst nach dem Sitzungsende. Alte Beispiele ohne diesen Nachweis bleiben gespeichert und sind von der sauberen Prüfung ausgenommen. Kein Modell ist freigegeben. Meta-KI, neue Modellfamilien und Trader-Gewichtungen sind nicht umgesetzt.
+Zuletzt geändert: eine Sitzungsreihe zählt nur Schlüsse mit nachgewiesenem Ende. Alte `sitzungsende`-Zeilen ohne Beleg stehen auf `ungeprueft`. Kurse ohne Ende sind `nicht_nachgewiesen`. Paper schreibt das alte Modell nicht mehr fort. Kein Horizont ist freigegeben. Die Meta-KI gibt keine Gewichte frei.
 
 Vorheriger veröffentlichter Commit: `a5134ba`.

@@ -22,7 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from ki import merkmale, trainiere
+from ki import merkmale, trainiere, zeitliche_quelle
 from kurse import Bar
 from lernen import aus_yahoo, kurse_merken, nachtragen, speichern, zielzeit
 
@@ -347,6 +347,22 @@ class KerzenzeitTests(unittest.TestCase):
                 _vektoren(vorher),
                 "Korrektur darf die alte Entscheidung nicht aendern",
             )
+
+
+    def test_gemischte_reihe_nimmt_keinen_unbelegten_schluss(self):
+        reihe = _reihe_um(MONTAG, sonder=MONTAG)
+        kerze = reihe[_index(reihe, MONTAG)]
+        meldung = _unix(MONTAG, 12, 0, BERLIN)
+        ohne_ende = _kerze(kerze.zeit, SONDER, None, None)
+        spaeter = _kerze(kerze.zeit + 60, SONDER, kerze.sitzungsende + 86400, "Europe/Berlin")
+        gemischt = _ersetzt(reihe, MONTAG, ohne_ende) + (spaeter,)
+        with self.subTest("merkmale"):
+            self._merkmal_ohne_zukuenftigen_schluss(gemischt, meldung, "gemischte Reihe")
+        with self.subTest("quelle"):
+            self.assertEqual(zeitliche_quelle(gemischt, meldung), "sitzungsende")
+            zu_wenig = reihe[:19] + (ohne_ende,)
+            self.assertIsNone(merkmale(zu_wenig, meldung, "zinsen"))
+            self.assertEqual(zeitliche_quelle(zu_wenig, meldung), "unbewiesen")
 
 
 if __name__ == "__main__":

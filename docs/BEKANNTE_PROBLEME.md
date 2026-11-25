@@ -18,6 +18,10 @@ Eine zweite Meldung am selben Kalendertag wird nicht mehr allein deshalb verworf
 
 Der Schluss einer Tageskerze gilt erst ab einem ausdrücklichen Sitzungsende, nicht ab dem Kerzenbeginn. Eine laufende Kerze gilt erst zum bekannten Kurszeitpunkt. Fehlt das Ende, wird der Schluss nicht geraten. Eine spätere Kurskorrektur ersetzt den gespeicherten Schluss nicht; die neue Fassung landet in `kurse_aenderung` mit `kontaminiert=1`. Trainingszeilen ohne Nachweis `zeitlich=sitzungsende` bleiben gespeichert und kommen nicht in die saubere Prüfung. Kein Horizont ist dadurch freigegeben.
 
+## Strenge Kerzenzeit, 25. November 2026
+
+Ein Trainingsbeispiel heißt nur noch `sitzungsende`, wenn jeder verwendete Schluss ein nachgewiesenes Ende vor der Entscheidung hat. Eine Kerze ohne Ende wird in einer solchen Reihe nicht über ihren Beginn verwendet. Alte Zeilen mit `sitzungsende` und ohne Beleg werden auf `ungeprueft` gesetzt und bleiben gespeichert. Kurse ohne Ende bekommen `beleg = nicht_nachgewiesen`. Es wird kein Zeitpunkt erfunden. Das alte `ki_modell` wird von Paper-Abschlüssen nicht mehr erhöht. Ein Verkauf ohne offenen Lernfall wird einmal dokumentiert und nicht trainiert. Die Meta-KI gibt weiter keine Gewichte frei.
+
 ## Offen
 
 1. Alte Zeilen in `daten/markt.sqlite` haben die neuen Zeiten erst, wenn das Fenster das Symbol mit einer ausreichenden Kursreihe erneut verarbeitet. Ein Massenupdate wurde nicht gestartet.

@@ -452,8 +452,6 @@ def _ki_kauf(pfad, zeile) -> tuple[bool, str]:
 
 
 def _ki_lernen(pfad, symbol: str, preis: Decimal) -> None:
-    from ki import lerne_ausgang
-
     position = next((eintrag for eintrag in _positionen(pfad, "KI") if eintrag["symbol"] == symbol), None)
     if position is None:
         return
@@ -462,9 +460,6 @@ def _ki_lernen(pfad, symbol: str, preis: Decimal) -> None:
         return
     zeit = _zeit_unix(str(position["zeit"]))
     if zeit is None or _schon_gelernt(pfad, symbol, str(position["zeit"])):
-        return
-    modell = lerne_ausgang(pfad, _balken(pfad, symbol), _thema(pfad, position), zeit, 1.0 if preis > einstieg else 0.0)
-    if modell is None:
         return
     _gelernt_merken(pfad, symbol, str(position["zeit"]))
 
@@ -1532,10 +1527,6 @@ def _fall_schliessen(pfad, konto: str, symbol: str, einstieg: str, ausstieg: str
     except (TypeError, json.JSONDecodeError):
         return
     if not eingabe:
-        return
-    from ki import lerne_merkmale
-
-    if lerne_merkmale(pfad, tuple(float(wert) for wert in eingabe), 1.0 if ergebnis > 0 else 0.0) is None:
         return
     with sqlite3.connect(pfad) as verbindung:
         verbindung.execute("UPDATE paper_faelle SET gelernt = 1 WHERE id = ?", (nummer,))
