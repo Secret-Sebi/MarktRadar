@@ -140,11 +140,7 @@ def trainiere(pfad: Path, symbol: str, balken, pruefen: bool = True) -> Modell:
                 except (TypeError, ValueError):
                     _beispiel(verbindung, int(nummer), horizont, int(zeit), "fehler", "Merkmale konnten nicht gebaut werden", None, None)
                     continue
-                if eingabe is None:
-                    grund_merkmal = "Schluss ohne nachgewiesenes Sitzungsende" if _reihe_mit_ende(reihe) else "Zum Meldungszeitpunkt liegen keine 20 Kurse davor"
-                    _beispiel(verbindung, int(nummer), horizont, int(zeit), "ausgeschlossen", grund_merkmal, None, None, zeitlich="unbewiesen")
-                    continue
-                if quelle != "sitzungsende" and _reihe_mit_ende(reihe):
+                if eingabe is None or quelle != "sitzungsende":
                     _beispiel(verbindung, int(nummer), horizont, int(zeit), "ausgeschlossen", "Schluss ohne nachgewiesenes Sitzungsende", None, None, zeitlich="unbewiesen")
                     continue
                 ziel = 1.0 if float(bewegung) > 0 else 0.0
@@ -217,13 +213,13 @@ def bekanntes_thema(name: str) -> str:
     return name if name in _THEMEN else "unklar"
 
 
-def eigene_entscheidung(modell: Modell, balken, thema: str) -> tuple[bool, str]:
+def eigene_entscheidung(modell: Modell, balken, thema: str, zeitpunkt: int | None = None) -> tuple[bool, str]:
     if modell.beispiele < _MINDEST:
         return False, (
             f"Das Modell hat {modell.beispiele} abgeschlossene Tage. "
             f"Unter {_MINDEST} entscheidet es noch nicht."
         )
-    eingabe = merkmale(balken, None, thema)
+    eingabe = merkmale(balken, zeitpunkt, thema)
     if eingabe is None:
         return False, "Dem Modell fehlen die Kurse vor der Entscheidung."
     chance = wahrscheinlichkeit(modell, eingabe)
@@ -323,7 +319,7 @@ def modell_fuer_anzeige(pfad: Path, horizont: int = 1) -> Modell | None:
 
 
 def nachweis(pfad: Path) -> dict:
-    leer = {"trainiert": 0, "ausgeschlossen": 0, "fehler": 0, "freigegeben": []}
+    leer = {"trainiert": 0, "ausgeschlossen": 0, "fehler": 0, "freigegeben": [], "verified": 0, "unverified": 0, "invalid": 0, "excluded": 0}
     if not pfad.exists():
         return leer
     with sqlite3.connect(pfad) as verbindung:
@@ -334,6 +330,21 @@ def nachweis(pfad: Path) -> dict:
         for status, anzahl in verbindung.execute("SELECT status, COUNT(*) FROM ki_beispiel GROUP BY status"):
             if status in leer:
                 leer[status] = int(anzahl)
+        leer["verified"] = int(verbindung.execute(
+            "SELECT COUNT(*) FROM ki_beispiel WHERE status = 'trainiert' AND zeitlich = 'sitzungsende' AND beleg = 'streng'"
+        ).fetchone()[0])
+        leer["unverified"] = int(verbindung.execute(
+            "SELECT COUNT(*) FROM ki_beispiel WHERE status = 'trainiert' AND IFNULL(zeitlich, '') != 'sitzungsende'"
+        ).fetchone()[0])
+        leer["invalid"] = int(leer["fehler"])
+        leer["excluded"] = int(leer["ausgeschlossen"])
+        if "kurse" in tabellen:
+            spalten = {str(zeile[1]) for zeile in verbindung.execute("PRAGMA table_info(kurse)")}
+            if "beleg" in spalten:
+                leer["kurse_verified"] = int(verbindung.execute("SELECT COUNT(*) FROM kurse WHERE beleg = 'nachgewiesen'").fetchone()[0])
+                leer["kurse_unverified"] = int(verbindung.execute("SELECT COUNT(*) FROM kurse WHERE beleg = 'nicht_nachgewiesen' OR beleg IS NULL").fetchone()[0])
+            if "kontaminiert" in spalten:
+                leer["kurse_invalid"] = int(verbindung.execute("SELECT COUNT(*) FROM kurse WHERE IFNULL(kontaminiert, 0) != 0").fetchone()[0])
         leer["freigegeben"] = [
             int(horizont)
             for (horizont,) in verbindung.execute("SELECT horizont FROM ki_horizont WHERE validiert = 1 ORDER BY horizont")
@@ -493,16 +504,13 @@ def _reihe_aus_kursen(verbindung, symbol: str, ersatz):
         return ersatz
     from kurse import Bar, mit_ende
 
-    hat_ende = any(ende is not None for _zeit, _schluss, ende in zeilen)
     gespeichert = []
     for zeit, schluss, ende in zeilen:
         bar = Bar(int(zeit), None, None, None, float(schluss), float(schluss), None)
         if ende is not None:
             gespeichert.append(mit_ende(bar, int(ende)))
-        elif hat_ende:
-            gespeichert.append(mit_ende(bar, None))
         else:
-            gespeichert.append(bar)
+            gespeichert.append(mit_ende(bar, None))
     return tuple(gespeichert) if len(gespeichert) >= len(tuple(ersatz or ())) else ersatz
 
 

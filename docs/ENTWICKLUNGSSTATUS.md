@@ -47,7 +47,7 @@ Offen und blockierend für eine Freigabe:
 
 Befehl: `/usr/bin/python3 -m unittest discover -q`
 
-Ergebnis am 24. November 2026 nach dem Modellvergleich: 232 Tests, 19,171 Sekunden, alle bestanden, keiner fehlgeschlagen, keiner übersprungen.
+Ergebnis am 25. November 2026 nach der Sperre ungeprüfter Reihen: 249 Tests, 32,660 Sekunden, alle bestanden, keiner fehlgeschlagen, keiner übersprungen.
 
 Der neue Test `test_fehlende_zielzeit_wird_nachgetragen_ohne_zweites_training` ist vor der Korrektur fehlgeschlagen und danach bestanden.
 
@@ -74,6 +74,6 @@ Hier weitermachen, nicht bei einem neuen System:
 
 ## 9. Letzter bearbeiteter Stand
 
-Zuletzt geändert: eine Sitzungsreihe zählt nur Schlüsse mit nachgewiesenem Ende. Alte `sitzungsende`-Zeilen ohne Beleg stehen auf `ungeprueft`. Kurse ohne Ende sind `nicht_nachgewiesen`. Paper schreibt das alte Modell nicht mehr fort. Kein Horizont ist freigegeben. Die Meta-KI gibt keine Gewichte frei.
+Zuletzt geändert: Gewichte bewegen sich nur bei `sitzungsende`. Gespeicherte Kurse ohne Ende bleiben unbekannt und werden nicht trainiert. `nachweis()` zeigt verified, unverified, invalid und excluded. Phasen 3 bis 6 des Sanierungsauftrags sind nicht abgeschlossen. Kein Horizont ist freigegeben.
 
 Vorheriger veröffentlichter Commit: `a5134ba`.

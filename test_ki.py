@@ -31,10 +31,29 @@ def _uhr(pfad: Path) -> None:
 
 
 def _kursreihe(start: float, schritte: int):
-    return tuple(Bar(index * 100, None, None, None, start + index, start + index, None) for index in range(1, schritte + 1))
+    from kurse import mit_ende
+
+    return tuple(
+        mit_ende(Bar(index * 100, None, None, None, start + index, start + index, None), index * 100)
+        for index in range(1, schritte + 1)
+    )
 
 
 class ModellTests(unittest.TestCase):
+    def test_unbelegte_reihe_bewegt_die_gewichte_nicht(self):
+        with tempfile.TemporaryDirectory() as ordner:
+            pfad = Path(ordner) / "markt.sqlite"
+            balken = tuple(Bar(index * 100, None, None, None, 10 + index, 10 + index, None) for index in range(1, 41))
+            speichern(pfad, "SAP.DE", aus_yahoo({"news": [{"title": "EZB hebt die Zinsen", "link": "https://beispiel.test/ohne-ende", "publisher": "Reuters", "providerPublishTime": 2500}]}))
+            _uhr(pfad)
+            nachtragen(pfad, "SAP.DE", balken)
+            modell = trainiere(pfad, "SAP.DE", balken, pruefen=False)
+            self.assertEqual(modell.beispiele, 0)
+            with sqlite3.connect(pfad) as verbindung:
+                zeile = verbindung.execute("SELECT status, zeitlich FROM ki_beispiel WHERE horizont = 1").fetchone()
+            self.assertEqual(zeile[0], "ausgeschlossen")
+            self.assertEqual(zeile[1], "unbewiesen")
+
     def test_spaetere_kurse_aendern_die_eingabe_nicht(self):
         vorher = _kursreihe(10, 25)
         nachher = vorher + tuple(Bar(9000, None, None, None, 500, 500, None) for _ in range(5))
@@ -243,11 +262,12 @@ class ModellTests(unittest.TestCase):
         leer = leeres_modell()
         self.assertFalse(eigene_entscheidung(leer, balken, "zinsen")[0])
         self.assertIn("noch nicht", eigene_entscheidung(leer, balken, "zinsen")[1])
-        eingabe = merkmale(balken, None, "zinsen")
+        moment = balken[-1].zeit
+        eingabe = merkmale(balken, moment, "zinsen")
         modell = leer
         for _ in range(12):
             modell = schritt(modell, eingabe, 1.0)
-        kauf, satz = eigene_entscheidung(modell, balken, "zinsen")
+        kauf, satz = eigene_entscheidung(modell, balken, "zinsen", moment)
         self.assertTrue(kauf)
         self.assertIn("selbst", satz)
         self.assertEqual(aktion_aus_ki("beobachten", modell, 0.8, True), "beobachten")

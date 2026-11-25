@@ -582,8 +582,8 @@ def fortschritt(pfad: Path) -> dict:
         stand["horizonte"] = "Freigegebene Horizonte: " + ", ".join(str(wert) for wert in bild["freigegeben"]) + "."
     else:
         stand["horizonte"] = (
-            f"Trainiert {bild['trainiert']}, ausgeschlossen {bild['ausgeschlossen']}, "
-            f"Fehler {bild['fehler']}. Kein Horizont ist freigegeben."
+            f"Trainiert {bild['trainiert']}, davon belegt {bild.get('verified', 0)}, "
+            f"ausgeschlossen {bild['ausgeschlossen']}, Fehler {bild['fehler']}. Kein Horizont ist freigegeben."
         )
     stand["pruefung"] = _pruefung_balken(pfad)
     stand["freigabe"] = _freigabe_text(stand["pruefung"])

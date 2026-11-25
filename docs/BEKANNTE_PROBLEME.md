@@ -22,6 +22,10 @@ Der Schluss einer Tageskerze gilt erst ab einem ausdrücklichen Sitzungsende, ni
 
 Ein Trainingsbeispiel heißt nur noch `sitzungsende`, wenn jeder verwendete Schluss ein nachgewiesenes Ende vor der Entscheidung hat. Eine Kerze ohne Ende wird in einer solchen Reihe nicht über ihren Beginn verwendet. Alte Zeilen mit `sitzungsende` und ohne Beleg werden auf `ungeprueft` gesetzt und bleiben gespeichert. Kurse ohne Ende bekommen `beleg = nicht_nachgewiesen`. Es wird kein Zeitpunkt erfunden. Das alte `ki_modell` wird von Paper-Abschlüssen nicht mehr erhöht. Ein Verkauf ohne offenen Lernfall wird einmal dokumentiert und nicht trainiert. Die Meta-KI gibt weiter keine Gewichte frei.
 
+## Ungeprüfte Reihen trainieren nicht, 25. November 2026
+
+`trainiere()` verändert die Horizontgewichte nur noch, wenn `zeitliche_quelle()` den Wert `sitzungsende` liefert. Eine gespeicherte Kursreihe ohne Sitzungsende wird als unbekanntes Ende gelesen und nicht über den Kerzenbeginn trainiert. `nachweis()` zählt `verified`, `unverified`, `invalid` und `excluded` aus den vorhandenen Spalten. Eine große Anzahl ist damit keine Qualität. Kein Horizont wird dadurch freigegeben.
+
 ## Offen
 
 1. Alte Zeilen in `daten/markt.sqlite` haben die neuen Zeiten erst, wenn das Fenster das Symbol mit einer ausreichenden Kursreihe erneut verarbeitet. Ein Massenupdate wurde nicht gestartet.
